@@ -1,0 +1,15 @@
+/stigmergy
+/bin/
+/dist/
+
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Working notes, kept in the tree but not published. codex-manual.md is a
+# vendored copy of OpenAI's Codex docs — reference material, not ours to
+# republish.
+/codex-manual.md
+/docs/plan.md
+/docs/TODO.md
+/docs/VERIFY.md

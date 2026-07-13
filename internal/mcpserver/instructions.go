@@ -1,0 +1,43 @@
+package mcpserver
+
+// PriorityBudget is how much of the instructions Codex prioritizes (first 512
+// chars, per the Codex manual). Anything the agent MUST do to avoid corrupting
+// shared state has to fit inside it; everything else is elaboration.
+const PriorityBudget = 512
+
+// priority is the mandatory workflow. It is kept under PriorityBudget by a
+// test, so edits here cannot silently push a rule out of the prioritized
+// window. Order matters: it is the order an agent must act in.
+const priority = `stigmergy is the shared memory and coordination layer for every agent in this repo. Use it instead of your own memory files.
+
+1. context_open(project_root) — absolute path — then root_register(agent_kind, worktree, session_label=<your host session id>).
+2. memory_search before starting work, and again before writing.
+3. claim_acquire before editing shared files; claim_check first if unsure.
+4. Writes are compare-and-swap: pass expected_version.
+`
+
+const extended = `
+Memories
+- Scopes: "project" (this repo) and "global" (this machine, all repos). Search returns project hits first.
+- memory_write(scope, key, type, description, body, expected_version): expected_version=null creates and fails if the key exists; an integer updates and fails unless it is the current version. On a cas_conflict the error carries the current entry — re-read it, merge, retry. Never work around a conflict by inventing a new key: that is how two agents end up with two half-true memories.
+- memory_list gives keys and descriptions only. memory_read(scope, key) gives the body.
+- memory_promote copies a project memory to global. Promote what is true of you or your machine everywhere; leave repo-specific facts in the project scope.
+- memory_delete(scope, key, expected_version) hard-deletes. It is audited.
+- Good memories are durable and non-obvious: conventions, decisions, constraints, preferences. Not things the code or git history already says.
+
+Claims
+- A claim reserves a file or a directory subtree while you work on it, so two agents do not edit the same thing at once.
+- claim_acquire(scope_path, recursive, reason, ttl_seconds) takes the narrowest scope that covers your edit. Claims expire; renew with claim_renew if you are still working, release with claim_release as soon as you are done.
+- If claim_acquire returns a claim_conflict, the owner is named. Do not wait silently and do not edit anyway: use mailbox_send to negotiate, or work elsewhere.
+- In Claude Code an edit to a claimed path is blocked outright. In Codex it cannot be blocked before it lands, so the turn is halted after the fact — respect claims there or you will lose work.
+
+Mailbox
+- mailbox_send(to_root, subject, body) reaches another root; mailbox_inbox reads yours. Check it when a claim blocks you, and answer promptly when someone is blocked on you.
+
+Roots and subagents
+- A "root" is a top-level agent session. Only roots may register, claim, write memory or send mail. Subagents and explorers read; they must report findings to their root and let the root write.
+- Heartbeat: any tool call refreshes your liveness. If you go quiet for an hour, your claims stop blocking others.
+`
+
+// Instructions is the server-wide guidance sent in initialize.instructions.
+func Instructions() string { return priority + extended }

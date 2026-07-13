@@ -1,0 +1,23 @@
+sandbox_mode = "workspace-write"
+approval_policy = "never"
+
+[sandbox_workspace_write]
+network_access = true
+
+[features.network_proxy]
+enabled = true
+
+[features.network_proxy.domains]
+"**.openai.com" = "allow"
+"**.chatgpt.com" = "allow"
+
+# >>> stigmergy managed block — do not edit; `stigmergy init` regenerates it >>>
+[mcp_servers.stigmergy]
+command = "stigmergy"
+args = ["mcp"]
+startup_timeout_sec = 10.0
+tool_timeout_sec = 60.0
+
+[memories]
+use_memories = false
+# <<< stigmergy managed block <<<

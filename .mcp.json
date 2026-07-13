@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "stigmergy": {
+      "args": [
+        "mcp"
+      ],
+      "command": "stigmergy"
+    }
+  }
+}
