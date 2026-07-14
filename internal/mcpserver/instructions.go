@@ -32,11 +32,15 @@ Claims
 - In Claude Code an edit to a claimed path is blocked outright. In Codex it cannot be blocked before it lands, so the turn is halted after the fact — respect claims there or you will lose work.
 
 Mailbox
-- mailbox_send(to_root, subject, body) reaches another root; mailbox_inbox reads yours. Check it when a claim blocks you, and answer promptly when someone is blocked on you.
+- mailbox_send(to_root, subject, body) reaches another root; mailbox_inbox reads yours.
+- Mail is delivered to you, not left for you to find: it is put in front of you at the end of your turn, and you cannot finish while a message is undelivered. Deal with it there and then — the agent that wrote to you is usually blocked on your answer.
+- Address the root that actually holds the path. Claim conflicts name the owner and say whether it is still live; root_list_active shows who is here and what each of them holds. Never write to a root id you are recalling from earlier in the session without checking it: that agent may be gone, and the one blocking you never asked.
+- A root that has gone silent cannot be written to at all, and the send is refused. That is not a dead end: its claims lapsed with it, so the path you wanted is free. Take it.
+- Agreeing to release a claim is not releasing it. Call claim_release, then mailbox_resolve to close the thread.
 
 Roots and subagents
 - A "root" is a top-level agent session. Only roots may register, claim, write memory or send mail. Subagents and explorers read; they must report findings to their root and let the root write.
-- Heartbeat: any tool call refreshes your liveness. If you go quiet for an hour, your claims stop blocking others.
+- Heartbeat: your tool calls and your edits refresh your liveness. Go quiet for fifteen minutes and you are treated as gone — your claims stop blocking others, and if you come back you must re-acquire them.
 `
 
 // Instructions is the server-wide guidance sent in initialize.instructions.

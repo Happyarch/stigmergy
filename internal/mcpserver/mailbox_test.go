@@ -1,6 +1,8 @@
 package mcpserver
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,93 @@ import (
 // compacted mid-negotiation would lose the thread id and have no route back —
 // and would then either re-send, or take the silence for consent and edit
 // anyway. That is the failure this tool exists to prevent.
+// TestRootListActiveAnswersWhoIsActuallyHere covers the question an agent has to
+// get right before it can negotiate at all. Nothing used to answer it: an agent
+// had to carry a root id in its head from whenever it last saw one, and a root id
+// remembered wrongly is not an error, it is an address — so mail went to agents
+// that had already died while the one holding the file was never asked.
+func TestRootListActiveAnswersWhoIsActuallyHere(t *testing.T) {
+	a := newHarness(t)
+	a.open()
+	rootA := a.register()
+
+	b := newHarnessIn(t, a.worktree, filepath.Join(t.TempDir(), "global.sqlite3"))
+	b.open()
+	outB := b.call("root_register", map[string]any{
+		"agent_kind": "codex", "worktree": b.worktree, "session_label": "sess-2",
+	})
+	rootB := outB["root"].(map[string]any)["root_id"].(string)
+
+	b.call("claim_acquire", map[string]any{
+		"scope_path": "src/api", "recursive": true, "reason": "rewriting the handlers",
+	})
+
+	out := a.call("root_list_active", map[string]any{})
+	roots, ok := out["roots"].([]any)
+	if !ok || len(roots) != 2 {
+		t.Fatalf("root_list_active returned %#v, want both agents", out["roots"])
+	}
+
+	seen := map[string]map[string]any{}
+	for _, r := range roots {
+		m := r.(map[string]any)
+		seen[m["root_id"].(string)] = m
+	}
+	if seen[rootA] == nil || seen[rootB] == nil {
+		t.Fatalf("roster is missing an agent: %#v", seen)
+	}
+	// An agent must be able to tell itself apart from everyone else — mail to
+	// yourself is refused, and the roster is where that is discovered.
+	if seen[rootA]["is_you"] != true {
+		t.Errorf("the calling agent is not marked is_you: %#v", seen[rootA])
+	}
+	if seen[rootB]["is_you"] != false {
+		t.Errorf("another agent is marked is_you: %#v", seen[rootB])
+	}
+	// Who holds what, so "who do I write to about this file" has an answer.
+	holds := seen[rootB]["holds"].([]any)
+	if len(holds) != 1 || holds[0].(string) != "src/api/**" {
+		t.Errorf("holds = %#v, want the recursive claim on src/api", holds)
+	}
+	if liveness, _ := seen[rootB]["liveness"].(string); !strings.HasPrefix(liveness, "live") {
+		t.Errorf("a working agent reads as %q, want live", liveness)
+	}
+}
+
+// TestClaimConflictNamesTheOwnerToWriteTo: the conflict is the moment the agent
+// needs the owner's id, so the id is put in the conflict rather than left for the
+// agent to reconstruct later from a context that may have been compacted since.
+func TestClaimConflictNamesTheOwnerToWriteTo(t *testing.T) {
+	a := newHarness(t)
+	a.open()
+	owner := a.register()
+	a.call("claim_acquire", map[string]any{"scope_path": "src/main.go", "reason": "refactor"})
+
+	b := newHarnessIn(t, a.worktree, filepath.Join(t.TempDir(), "global.sqlite3"))
+	b.open()
+	b.call("root_register", map[string]any{
+		"agent_kind": "codex", "worktree": b.worktree, "session_label": "sess-2",
+	})
+
+	_, _, errBody := b.tryCall("claim_acquire", map[string]any{
+		"scope_path": "src/main.go", "reason": "bug fix",
+	})
+	if errBody == nil {
+		t.Fatal("claiming a claimed path succeeded")
+	}
+	msg, _ := errBody["message"].(string)
+	if !strings.Contains(msg, owner) {
+		t.Errorf("conflict does not name the owner %s to write to: %q", owner, msg)
+	}
+	if !strings.Contains(msg, "live") {
+		t.Errorf("conflict does not say whether the owner can answer: %q", msg)
+	}
+	conflict, ok := errBody["conflict"].(map[string]any)
+	if !ok || conflict["owner_liveness"] == nil {
+		t.Errorf("conflict payload carries no owner_liveness: %#v", errBody["conflict"])
+	}
+}
+
 func TestMailboxThreadsShowsWhatYouSentBeforeAnyReply(t *testing.T) {
 	a, b := twoRoots(t)
 	rootA := a.session.root.RootID

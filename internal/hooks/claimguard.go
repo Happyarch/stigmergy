@@ -153,6 +153,12 @@ func ConflictDetail(conflicts []store.Claim) string {
 			fmt.Fprintf(&sb, "    branch:   %s\n", c.Branch)
 		}
 		fmt.Fprintf(&sb, "    expires:  %s\n", humanExpiry(c.ExpiresAt))
+		// Who to talk to, spelled out. An agent reconstructing a root id from
+		// memory or from an old message is how mail ends up addressed to an agent
+		// that died an hour ago, so the id it needs is put in front of it at the
+		// exact moment it needs it, together with whether that root can answer.
+		fmt.Fprintf(&sb, "    owner:    %s — write to it with mailbox_send(to_root=%q)\n",
+			c.OwnerLiveness, c.RootID)
 	}
 	return sb.String()
 }

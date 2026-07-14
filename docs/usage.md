@@ -103,7 +103,13 @@ loop each agent follows:
    decisions, constraints. Not things the code or git history already say.
 
 Claims expire on their own (30 minutes by default), and a crashed agent's claims die
-with it inside an hour. Nothing leaks.
+with it inside fifteen minutes. Nothing leaks.
+
+Your mail is delivered to you, not left for you to find. On Claude Code you cannot end
+a turn while a message you have never been shown is waiting: the turn is blocked, the
+message is put in front of you, and you deal with it. On Codex it arrives as the turn
+begins and after each edit. Either way, answering is not optional politeness — the
+agent that wrote to you is usually blocked on your reply.
 
 ---
 
@@ -122,9 +128,34 @@ responses:
 There is no fourth option. Do not edit around the claim, and do not re-file the same
 work under a different path.
 
-If the owner turns out to be gone, `mailbox_send` tells you so — and that is good
-news, because a dead root's claims have lapsed with it and the paths it held are
-already free.
+### Write to the agent that is actually there
+
+The `to_root` in that `mailbox_send` is the whole game, and it is easy to get wrong.
+The conflict names the root that holds the path *and* says whether it is still live —
+"live (last seen 20s ago)", "quiet (last seen 9m ago; lapses in 6m if it stays
+silent)". Use that id. Do not reconstruct one from earlier in the session, from a
+memory, or from a message you read twenty minutes ago: a root id remembered wrongly is
+not an error, it is an address, and the mail goes cheerfully to an agent that no longer
+exists while the one blocking you is never asked.
+
+If you are unsure who is here, `root_list_active` tells you: every agent working in the
+repository right now, how recently each was heard from, and what each of them holds.
+
+If the owner turns out to be gone, `mailbox_send` refuses — and that is good news, not
+a dead end. A dead root's claims have lapsed with it, so the path you wanted is already
+free. The refusal says so, and hands you the list of agents who *are* here in case you
+still need one of them.
+
+And if you asked for a file and no answer ever comes, check `mailbox_threads`. A thread
+whose counterparty has died is marked as such: nobody is thinking about your request,
+and the claim you were waiting on is gone. Stop waiting, take the claim, and close the
+thread with `mailbox_resolve(abandoned=true)`.
+
+### Saying yes is not releasing
+
+If you agree to hand a path over, `claim_release` is what actually hands it over.
+Agreeing in a message and then keeping the claim leaves the other agent exactly as
+blocked as before, and now waiting on a promise as well.
 
 On **Codex** the edit is *not* refused. You get a warning first and the turn is
 halted after the edit lands, which means undoing work. Check claims yourself with
@@ -317,12 +348,21 @@ half-true memories and no way to tell which one is current.
 
 ### A claim is held by an agent that is clearly gone
 
-It will free itself. A root that has not been heard from for an hour stops holding
-claims, and claims expire on their own within 30 minutes by default.
+It will free itself. A root that has not been heard from for fifteen minutes stops
+holding claims, and claims expire on their own within 30 minutes by default.
+
+Check first rather than guessing: `root_list_active` shows who is actually working
+here and how recently each was heard from, and a claim conflict says the same thing
+about the owner in the same breath as it names them.
 
 If you want to confirm, `mailbox_send` to the owner: if the root is dead you get
 `recipient_inactive`, which tells you in as many words that its claims have lapsed
-and the paths are free.
+and the paths are free — and names the agents that *are* active, so you can write to
+the right one instead.
+
+Do not wait on a dead agent. If you have already written to one and are waiting for a
+reply, `mailbox_threads` marks the thread: the counterparty is gone, and no answer is
+coming.
 
 To force the issue: `stigmergy doctor --gc` reaps long-silent roots.
 

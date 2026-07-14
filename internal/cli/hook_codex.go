@@ -44,6 +44,42 @@ func newCodexSessionStartCmd() *cobra.Command {
 	}
 }
 
+// newCodexMailNotifyCmd delivers mail on Codex, at the two moments Codex gives
+// us that reliably reach the agent: the start of a turn, and after a tool call.
+//
+// Codex has a Stop event, but it cannot be used for this. Its Stop output is
+// limited to continue/stopReason/systemMessage, and systemMessage is documented
+// as a warning surfaced "in the UI or event stream" — to the human, that is, with
+// no promise it lands in the agent's context. Claude's Stop hook can put text
+// into the conversation and block; Codex's cannot. So on Codex the mailbox is
+// delivered rather than enforced: the agent is told at the top of each turn and
+// after each tool call, and the tool results carry the unread count as a backstop.
+//
+// Marking the mail delivered is therefore deliberate here and not merely
+// mechanical: these are the channels we can see land, so a message announced
+// through them has genuinely been announced.
+func newCodexMailNotifyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "codex-mail-notify",
+		Short:        "Codex UserPromptSubmit/PostToolUse: hand the agent its mail, and keep its claims alive",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			in, err := hooks.DecodeCodex(os.Stdin)
+			if err != nil {
+				return nil
+			}
+			hooks.Heartbeat("codex", in.SessionID, in.CWD)
+
+			text := hooks.MailText(hooks.CheckMail("codex", in.SessionID, in.CWD, true))
+			if text == "" {
+				return nil
+			}
+			return json.NewEncoder(os.Stdout).Encode(hooks.CodexWarning{SystemMessage: text})
+		},
+	}
+}
+
 func newCodexClaimWarnCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "codex-claim-warn",
@@ -55,6 +91,10 @@ func newCodexClaimWarnCmd() *cobra.Command {
 			if err != nil {
 				return nil
 			}
+			// Every edit is proof this agent is alive, which is what lets the root
+			// TTL stay short. Codex has no other regular heartbeat.
+			hooks.Heartbeat("codex", in.SessionID, in.CWD)
+
 			d := hooks.Guard("codex", in.SessionID, in.CWD, hooks.ExtractPaths(in))
 			if d.Allow || len(d.Conflicts) == 0 {
 				// Allowed, or we could not tell. Fail open: a warning we cannot
@@ -99,5 +139,6 @@ func newCodexHookCmds() []*cobra.Command {
 		newCodexSessionStartCmd(),
 		newCodexClaimWarnCmd(),
 		newCodexClaimStopCmd(),
+		newCodexMailNotifyCmd(),
 	}
 }

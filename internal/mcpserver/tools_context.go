@@ -129,6 +129,74 @@ func (s *Session) rootRegister(_ context.Context, _ *mcp.CallToolRequest, in Roo
 	return nil, RootRegisterOutput{Root: root, Resumed: resumed}, nil
 }
 
+// RootListActiveOutput is the roster: who is working in this repository right
+// now, and what each of them holds.
+type RootListActiveOutput struct {
+	Roots []ActiveRoot `json:"roots"`
+}
+
+// ActiveRoot is another agent, described the way you need it described in order
+// to decide whether to write to it.
+type ActiveRoot struct {
+	RootID    string   `json:"root_id"`
+	AgentKind string   `json:"agent_kind"`
+	Worktree  string   `json:"worktree"`
+	Branch    string   `json:"branch,omitempty"`
+	Liveness  string   `json:"liveness"`
+	Holds     []string `json:"holds"`
+	IsYou     bool     `json:"is_you"`
+}
+
+// rootListActive answers the question an agent has to get right before it can
+// negotiate at all: who is actually here?
+//
+// Nothing used to answer it. An agent that wanted to write to the owner of a
+// claim had to have kept the root id from a conflict message — across compaction,
+// across its own summarizing, across whatever else it had been doing since — and
+// a root id remembered wrongly is not an error, it is an address. Mail sent to a
+// root that has since died was accepted and never read, and the sender waited on
+// an answer that could not come. Meanwhile the agent that was actually holding
+// the file, and could have handed it over in one exchange, was never asked.
+//
+// So: a roster, freshly read, that an agent can consult instead of remembering.
+func (s *Session) rootListActive(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RootListActiveOutput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpened(); err != nil {
+		return nil, RootListActiveOutput{}, toolError(err)
+	}
+	roots, err := s.project.ActiveRoots()
+	if err != nil {
+		return nil, RootListActiveOutput{}, toolError(err)
+	}
+	claims, err := s.project.ActiveClaims("")
+	if err != nil {
+		return nil, RootListActiveOutput{}, toolError(err)
+	}
+	held := map[string][]string{}
+	for _, c := range claims {
+		scope := c.ScopePath
+		if c.Recursive {
+			scope += "/**"
+		}
+		held[c.RootID] = append(held[c.RootID], scope)
+	}
+
+	out := RootListActiveOutput{Roots: []ActiveRoot{}}
+	for _, r := range roots {
+		holds := held[r.RootID]
+		if holds == nil {
+			holds = []string{}
+		}
+		out.Roots = append(out.Roots, ActiveRoot{
+			RootID: r.RootID, AgentKind: r.AgentKind, Worktree: r.Worktree, Branch: r.Branch,
+			Liveness: r.Liveness(), Holds: holds, IsYou: r.RootID == s.actor(),
+		})
+	}
+	s.touch()
+	return nil, out, nil
+}
+
 // RootHeartbeatOutput confirms liveness was refreshed.
 type RootHeartbeatOutput struct {
 	RootID     string `json:"root_id"`

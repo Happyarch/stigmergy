@@ -25,6 +25,10 @@ type ClaudeInput struct {
 	HookEventName  string         `json:"hook_event_name"`
 	ToolName       string         `json:"tool_name"`
 	ToolInput      map[string]any `json:"tool_input"`
+	// StopHookActive is set when the agent is only still running because a Stop
+	// hook blocked it. It is the loop guard: a hook that blocks unconditionally
+	// on every Stop would never let the agent finish at all.
+	StopHookActive bool           `json:"stop_hook_active"`
 	Raw            map[string]any `json:"-"`
 }
 
@@ -91,6 +95,45 @@ type SessionStartContext struct {
 func NewSessionContext(text string) SessionStartContext {
 	var c SessionStartContext
 	c.HookSpecificOutput.HookEventName = "SessionStart"
+	c.HookSpecificOutput.AdditionalContext = text
+	return c
+}
+
+// StopBlock refuses to let the agent end its turn, and says why.
+//
+// This is the only channel in Claude Code that reaches an agent which is not
+// asking for anything. Mail cannot wait for the agent to think to call
+// mailbox_inbox — the whole problem is that it does not think to — and it cannot
+// wait for the next user prompt either, because the user may not send one for an
+// hour, and the agent it is blocking is stuck the whole time. So delivery happens
+// at the one moment every agent reliably reaches: the end of its turn.
+//
+// The reason text goes into the agent's context, and the turn continues.
+type StopBlock struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
+}
+
+// NewStopBlock builds a Stop decision that hands the agent its mail instead of
+// letting it finish.
+func NewStopBlock(reason string) StopBlock {
+	return StopBlock{Decision: "block", Reason: reason}
+}
+
+// PromptContext injects text at the top of a user's turn.
+type PromptContext struct {
+	HookSpecificOutput struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	} `json:"hookSpecificOutput"`
+}
+
+// NewPromptContext builds a UserPromptSubmit injection. It is the gentle half of
+// delivery: an agent coming back to a fresh instruction sees what is waiting
+// before it plans around it.
+func NewPromptContext(text string) PromptContext {
+	var c PromptContext
+	c.HookSpecificOutput.HookEventName = "UserPromptSubmit"
 	c.HookSpecificOutput.AdditionalContext = text
 	return c
 }

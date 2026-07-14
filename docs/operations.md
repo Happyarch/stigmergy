@@ -15,8 +15,10 @@ changing a design decision, not a setting.
 | `DefaultClaimTTL` | 30 min | `store/claims.go` | long enough for a real unit of work; short enough that a forgotten claim is an annoyance, not an outage |
 | `MinClaimTTL` | 60 s | | below this a claim expires before anyone can react to it |
 | `MaxClaimTTL` | 24 h | | a claim that never expires is a deadlock waiting to happen |
-| `RootTTL` | 1 h | `store/roots.go` | a root unheard-from this long stops holding claims. **This is the crash-safety net** — see below |
+| `RootTTL` | 15 min | `store/roots.go` | a root unheard-from this long stops holding claims, and can no longer be sent mail. **This is the crash-safety net** — see below |
+| `StaleRootSilence` | 5 min | | a root still inside the TTL but quiet long enough to say so when it is named. Changes no decision; it is what turns "live" into "quiet (last seen 9m ago; lapses in 6m)" |
 | `StaleRootAge` | 7 d | | when a silent root gets `ended_at` stamped by `ReapStaleRoots` |
+| heartbeat budget | 100 ms | `hooks/mail.go` | a heartbeat must never cost the agent its edit |
 | `AuditRetention` | 90 d | `store/gc.go` | long enough to investigate anything anyone still remembers |
 | `MailRetention` | 30 d | | resolved threads only; a settled conversation stops being worth re-reading |
 | `MaxSearchHits` | 20 | `store/memories.go` | per scope |
@@ -44,8 +46,22 @@ That is why there is no daemon. Expiry is lazy, folded into the query predicate 
 evaluated on read. Nothing runs in the background, so nothing can fail to run in the
 background.
 
-Any tool call refreshes a root's liveness, so an agent that is doing anything at all
-stays alive without thinking about it.
+Any tool call refreshes a root's liveness — and so does any *edit*, and any turn,
+through the hooks. An agent that is doing anything at all stays alive without thinking
+about it, which is precisely what lets the TTL be fifteen minutes rather than an hour:
+the TTL is how long a *dead* agent goes on blocking the living, and there is no longer
+any reason to pad it against the possibility that a live one simply had nothing to say.
+
+The price is at the other end. A root that lapses and then comes back **loses its
+claims** rather than resurrecting them: the paths had been declared free, someone may
+already have taken one, and two agents each believing they hold the same file is the
+one thing this whole design exists to prevent. It re-acquires, and finds out. You will
+see this in the audit log as `root_lapsed_claims_released`.
+
+Fifteen minutes is not sacred, but it is a trade, not a preference. Raise it and a
+crashed agent blocks others for longer. Lower it and an agent that legitimately goes
+quiet — a very long tool call, a human staring at a diff — starts losing claims it is
+still using.
 
 ---
 
@@ -58,7 +74,7 @@ stigmergy doctor --gc
 Two things happen:
 
 **`ReapStaleRoots`** stamps `ended_at` on roots that have been silent for 7 days.
-Cosmetic — they already stopped holding claims after an hour.
+Cosmetic — they already stopped holding claims fifteen minutes in.
 
 **`GC`** prunes:
 
@@ -179,3 +195,28 @@ A newer stigmergy having written the database is a *hard* fail on Claude: every 
 stays blocked until you upgrade the binary. `doctor` says so in as many words, because
 "all my edits are blocked" with no explanation is the worst experience this tool can
 inflict.
+
+### Upgrading: migrate the database and the binary together
+
+This is the sharp edge of the rule above, and it is easy to walk into.
+
+Running a *newer* `stigmergy` anywhere — `init`, `doctor`, an MCP server — migrates the
+project database. From that moment, the older binary still on `$PATH` fails closed on
+every edit, in every session, because it cannot read the schema and refuses to guess
+about claims. The system is behaving exactly as designed and the experience is that all
+work stops.
+
+So: install the new binary, *then* migrate. In practice:
+
+```sh
+make install                 # or: cp bin/stigmergy ~/.local/bin/stigmergy
+stigmergy doctor             # confirms the schema version it can actually read
+```
+
+If the copy fails with `Text file busy`, a running MCP server is holding the old binary
+open. `mv` it aside and copy the new one into place — the running process keeps its
+inode, and the next session picks up the new file.
+
+Restart agent sessions afterwards. A session's MCP server is the binary it was launched
+with: until it restarts, that session keeps the old tool set and the old constants, even
+though its hooks (which are fresh processes each time) already have the new ones.

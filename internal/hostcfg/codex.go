@@ -151,12 +151,21 @@ func splitTOMLBlock(s string) (before, after string, found bool) {
 // The matchers follow the Codex manual: SessionStart matches on the start
 // source, and the tool events match on tool name, where apply_patch is
 // addressable as Edit|Write.
+//
+// Mail is delivered on UserPromptSubmit and after each edit, and not on Stop.
+// Codex's Stop output is limited to systemMessage, which the manual describes as
+// a warning surfaced in the UI or event stream — it reaches the human, not
+// reliably the agent's context. Claude's Stop hook can block the turn and hand
+// the agent its mail; Codex's cannot, so mail here arrives while the agent is
+// still working rather than as a last word before it stops.
 var codexHooks = []struct {
 	event, matcher, command string
 }{
 	{"SessionStart", "startup|resume|clear|compact", Binary + " hook codex-session-start"},
+	{"UserPromptSubmit", "", Binary + " hook codex-mail-notify"},
 	{"PreToolUse", "Edit|Write", Binary + " hook codex-claim-warn"},
 	{"PostToolUse", "Edit|Write", Binary + " hook codex-claim-stop"},
+	{"PostToolUse", "Edit|Write", Binary + " hook codex-mail-notify"},
 }
 
 func installCodexHooks(path string) error {

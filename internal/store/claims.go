@@ -33,6 +33,12 @@ type Claim struct {
 	Reason    string `json:"reason"`
 	CreatedAt string `json:"created_at"`
 	ExpiresAt string `json:"expires_at"`
+	// OwnerLiveness is how recently the owner was heard from. A claim names
+	// whoever took it, but "who holds this" and "who can answer me about it" are
+	// different questions, and an agent that is about to negotiate needs the
+	// second one answered — otherwise it writes to a root that is technically
+	// still inside its TTL and functionally already dead.
+	OwnerLiveness string `json:"owner_liveness"`
 	// Own is set on the way out, relative to whoever asked: an agent needs to
 	// know whether a claim in its way is its own.
 	Own bool `json:"own"`
@@ -49,7 +55,7 @@ func (c Claim) Scope() claims.Scope {
 // predicate rather than something a cleanup daemon has to catch up on.
 const activeClaims = `
 SELECT c.id, c.scope_path, c.recursive, c.root_id, r.agent_kind, c.worktree,
-       COALESCE(c.branch, ''), c.reason, c.created_at, c.expires_at
+       COALESCE(c.branch, ''), c.reason, c.created_at, c.expires_at, r.last_seen_at
   FROM claims c JOIN roots r ON r.root_id = c.root_id
  WHERE c.released_at IS NULL
    AND c.expires_at > :now
@@ -61,10 +67,12 @@ func scanClaims(rows *sql.Rows, selfRoot string) ([]Claim, error) {
 	out := []Claim{}
 	for rows.Next() {
 		var c Claim
+		var owner Root
 		if err := rows.Scan(&c.ID, &c.ScopePath, &c.Recursive, &c.RootID, &c.AgentKind,
-			&c.Worktree, &c.Branch, &c.Reason, &c.CreatedAt, &c.ExpiresAt); err != nil {
+			&c.Worktree, &c.Branch, &c.Reason, &c.CreatedAt, &c.ExpiresAt, &owner.LastSeenAt); err != nil {
 			return nil, serr.Internalf(err, "failed to read claims")
 		}
+		c.OwnerLiveness = owner.Liveness()
 		c.Own = selfRoot != "" && c.RootID == selfRoot
 		out = append(out, c)
 	}
@@ -169,9 +177,15 @@ func (d *DB) AcquireClaim(req ClaimRequest) (*Claim, error) {
 			// promise. Hand back the claim we already hold.
 			return &c, nil
 		}
+		// The owner's liveness is in the message, not just the payload: it is what
+		// decides whether negotiating is even worth doing, and an agent that has
+		// to go and look it up separately will not.
 		return nil, serr.E(serr.ClaimConflict,
-			"%s is claimed by %s (worktree %s, reason: %q, expires %s) — negotiate with mailbox_send, or work elsewhere",
-			req.ScopePath, c.RootID, c.Worktree, c.Reason, c.ExpiresAt).
+			"%s is claimed by %s — %s (worktree %s, reason: %q, expires %s). "+
+				"Write to that root with mailbox_send(to_root=%q), or work elsewhere. "+
+				"Do not address any other root about this path: %s is the one holding it.",
+			req.ScopePath, c.RootID, c.OwnerLiveness, c.Worktree, c.Reason, c.ExpiresAt,
+			c.RootID, c.RootID).
 			With("conflict", c)
 	}
 

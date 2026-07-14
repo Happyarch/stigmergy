@@ -40,12 +40,20 @@ const EditTools = `Edit|Write|NotebookEdit`
 const AutoMemoryKey = "autoMemoryEnabled"
 
 // claudeHooks is what init installs, and what remove takes back out.
+//
+// The Stop entry is what makes the mailbox work. Everything else here guards
+// something the agent was already trying to do; mail-gate is the one hook that
+// reaches an agent which is not asking for anything, and without it the mailbox
+// is a pull channel with nobody pulling — messages an agent is never told about,
+// and a sender waiting on a reply that is never coming.
 var claudeHooks = []struct {
 	event, matcher, command string
 }{
 	{"SessionStart", "", Binary + " hook session-start"},
+	{"UserPromptSubmit", "", Binary + " hook mail-notify"},
 	{"PreToolUse", EditTools, Binary + " hook claim-guard"},
 	{"PreToolUse", RootGateTools, Binary + " hook root-gate"},
+	{"Stop", "", Binary + " hook mail-gate"},
 	{"SessionEnd", "", Binary + " hook session-end"},
 }
 

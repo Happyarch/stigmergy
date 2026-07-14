@@ -51,7 +51,7 @@ root, because a root belongs to a repository.
 | State | Tools |
 |---|---|
 | Unopened (ungated) | `context_open` |
-| Opened | `root_register`, `memory_search`, `memory_read`, `memory_list`, `claim_check`, `claim_list_active` |
+| Opened | `root_register`, `root_list_active`, `memory_search`, `memory_read`, `memory_list`, `claim_check`, `claim_list_active` |
 | Registered | `root_heartbeat`, `root_deregister`, `memory_write`, `memory_promote`, `memory_delete`, `claim_acquire`, `claim_renew`, `claim_release`, and all six `mailbox_*` |
 
 ---
@@ -149,15 +149,49 @@ registering under a worktree the caller never named would make the *next* sessio
 resume miss — and strand this root's claims until they timed out. `context_open`
 returns `worktree_root`; pass that.
 
+### `root_list_active`
+
+> List the agents actually working in this repository right now, what each holds, and how recently each was heard from.
+
+No parameters. State: **Opened**.
+
+**Returns** `roots[]`: `root_id`, `agent_kind`, `worktree`, `branch`, `liveness`,
+`holds[]`, `is_you`.
+
+This answers the question an agent has to get right before it can negotiate at all,
+and which nothing used to answer: *who is actually here?* Without it, an agent that
+wanted to write to the owner of a claim had to have kept the root id in its head —
+across compaction, across its own summarizing, across everything else it had been
+doing since. A root id remembered wrongly is not an error, it is an address: the mail
+is delivered, to nobody, while the agent that actually holds the file is never asked.
+
+`liveness` is prose rather than a timestamp, because the decision it feeds is not a
+calculation:
+
+| | meaning |
+|---|---|
+| `live (last seen 20s ago)` | it will read your mail |
+| `quiet (last seen 9m ago; lapses in 6m if it stays silent)` | still holds its claims, still reachable — but may be about to lapse |
+
+A root past the TTL appears here not at all. It is gone, its claims are free, and it
+cannot be written to.
+
 ### `root_heartbeat`
 
 > Refresh this root's liveness so its claims keep holding. Any tool call also does this.
 
 No parameters. State: **Registered**. Returns `root_id`, `last_seen_at`.
 
-Only needed if the agent will be silent for a long time — a root unheard-from for
-an hour (`RootTTL`) stops holding claims. Any other tool call does the same thing
-as a side effect.
+Rarely needed by hand. A root unheard-from for fifteen minutes (`RootTTL`) stops
+holding claims — but every tool call refreshes liveness, and so does every *edit*, via
+the host hooks. An agent that is doing anything at all is proving it is alive as a side
+effect of doing it.
+
+The short TTL is what makes a dead agent stop blocking the living quickly. Its price:
+a root that has lapsed and then comes back **loses its claims** rather than
+resurrecting them — the paths were declared free, someone may already have taken one,
+and two agents each believing they hold the same file is the one outcome stigmergy
+exists to prevent. Re-acquire, and find out.
 
 **Errors** — `wrong_state`, including when the root has vanished:
 > `your root is no longer active — it expired or was ended; call root_register again (your previous claims have been released)`
@@ -326,10 +360,18 @@ have.
 **Errors** — `wrong_state`; `invalid_input` (bad scope path, empty reason, TTL out
 of range); `claim_conflict`:
 
-> `<path> is claimed by <root> (worktree <w>, reason: "<why>", expires <when>) — negotiate with mailbox_send, or work elsewhere`
+> `<path> is claimed by <root> — live (last seen 20s ago) (worktree <w>, reason: "<why>", expires <when>). Write to that root with mailbox_send(to_root="<root>"), or work elsewhere. Do not address any other root about this path: <root> is the one holding it.`
 
-with the full blocking claim in `conflict`. The owner is always named, because a
-conflict you cannot negotiate is just a wall.
+with the full blocking claim in `conflict`, including `owner_liveness`. The owner is
+always named, because a conflict you cannot negotiate is just a wall — and its
+liveness is named in the same breath, because "who holds this" and "who can answer me
+about it" are different questions, and an agent that has to go and look the second one
+up separately will not.
+
+The id is put in front of the agent at the exact moment it needs it, so it never has
+to reconstruct one later from a context that may have been compacted since. That is
+not a nicety: a root id recalled wrongly is a working address for an agent that no
+longer exists.
 
 ### `claim_check`
 
@@ -387,13 +429,32 @@ need it"*); `not_owner`, carrying `owner`:
 The mailbox exists so that "you are blocked" has an answer other than "wait" or
 "barge through". Threads have a state: `open`, `resolved`, or `abandoned`.
 
+**Mail is delivered, not left lying about.** This is not an MCP concern — no tool
+pushes anything — but it governs how the tools below behave, so it belongs here. The
+host hooks put unread mail in front of the agent: on Claude Code by refusing to let a
+turn end while a message has never been shown, on Codex at the start of a turn and
+after each edit. See [hosts.md](hosts.md).
+
+Two timestamps, deliberately distinct:
+
+| | whose record | set by |
+|---|---|---|
+| `notified_at` | stigmergy's: we put this in front of the agent | the delivery hooks, once per message |
+| `read_at` | the agent's: it looked | `mailbox_mark_read` |
+
+Conflating them is what made the mailbox a pull channel with nothing pulling it: an
+unread message was indistinguishable from an undelivered one, so nothing could tell
+whether an agent had ignored its mail or had simply never been told it had any. There
+is no tool to set `notified_at` — an agent that could suppress its own notifications
+would eventually do so.
+
 ### `mailbox_send`
 
 > Write to another root — use this when a claim blocks you, rather than waiting silently or editing around it. Pass a thread_id to continue an existing conversation.
 
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
-| `to_root` | string | yes | the `root_id`; claim conflicts name the owner |
+| `to_root` | string | yes | the `root_id`; claim conflicts name the owner, `root_list_active` lists them all |
 | `subject` | string | yes | |
 | `body` | string | yes | say what you need *and what you propose* |
 | `claim_id` | int | no | the claim this is about |
@@ -401,7 +462,7 @@ The mailbox exists so that "you are blocked" has an answer other than "wait" or
 | | | | State: **Registered** |
 
 **Returns** `message`: `id`, `thread_id`, `from_root`, `to_root`, `subject`, `body`,
-`sent_at`, `read_at`.
+`sent_at`, `read_at`, `notified_at`.
 
 **Errors** — `wrong_state`; `invalid_input` (missing fields, no such thread, or
 sending to yourself); `recipient_inactive`.
@@ -410,9 +471,17 @@ That last one is a *loud* failure on purpose. Mail to a dead root would sit unre
 forever while the sender waited for an answer that could never come. So instead the
 sender is told the root is gone — and, crucially, what that implies:
 
-> `root <r> is no longer active, so it cannot answer you — its claims have lapsed with it, and the paths it held are free`
+> `root <r> is no longer active, so it cannot answer you — its claims have lapsed with it, and the paths it held are free. The agents actually active here are: r-a1b2 (claude-code, holds src/api/**); r-c3d4 (codex). Address the one that holds the path you want — root_list_active shows this too.`
 
-The blocked agent's problem has, in fact, just solved itself.
+The blocked agent's problem has, in fact, just solved itself. But refusing is not
+enough on its own, which is why the roster is in the error and in `active_roots` on
+the payload. An agent that addressed a dead root got the id from *somewhere* — an old
+message, a memory, its own compacted context — and if all it is told is "wrong", it
+will guess again, with no more reason to be right the second time. So it is handed the
+answer instead: who is here, and what each of them holds.
+
+If nobody else is active at all, the error says that too, and says what follows from
+it: nothing is holding the path against you, so go ahead.
 
 ### `mailbox_inbox`
 
@@ -438,8 +507,8 @@ for those, see `mailbox_threads`.
 | | | | State: **Registered** |
 
 **Returns** `threads[]`, most recently active first: `id`, `claim_id`, `state`,
-`resolution`, `with` (the other root), `subject` (of the latest message),
-`last_message_at`, `last_from_self`, `unread`, `messages` (count).
+`resolution`, `with` (the other root), `with_liveness`, `subject` (of the latest
+message), `last_message_at`, `last_from_self`, `unread`, `messages` (count).
 
 This exists because an inbox is not a conversation list. A message you sent that
 nobody has answered yet appears in *no* inbox — least of all your own. Without this,
@@ -447,7 +516,16 @@ an agent compacted mid-negotiation loses the thread id and has no route back to 
 conversation it opened: it would re-send the same message, or read the silence as
 consent and edit anyway.
 
-`last_from_self: true` means the ball is in their court.
+`last_from_self: true` means the ball is in their court. `with_liveness` says whether
+anyone is still in that court to play it — and the combination is the one thing an
+agent waiting on a reply cannot otherwise work out. Silence from a live agent means
+"they are thinking about it". Silence from a dead one means nobody will ever answer,
+and the claim you were waiting on lapsed with them. Those call for opposite actions,
+and they look identical from the outside.
+
+So: `last_from_self: true` plus a `with_liveness` of `gone …` means **stop waiting**.
+The path is free. Take the claim, and close the thread with
+`mailbox_resolve(abandoned=true)`.
 
 ### `mailbox_thread`
 

@@ -9,6 +9,15 @@
           }
         ],
         "matcher": "Edit|Write"
+      },
+      {
+        "hooks": [
+          {
+            "command": "stigmergy hook codex-mail-notify",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write"
       }
     ],
     "PreToolUse": [
@@ -31,6 +40,16 @@
           }
         ],
         "matcher": "startup|resume|clear|compact"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "stigmergy hook codex-mail-notify",
+            "type": "command"
+          }
+        ]
       }
     ]
   }

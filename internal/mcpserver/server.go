@@ -32,6 +32,12 @@ func New(version, globalPath string) (*mcp.Server, *Session) {
 	}, s.rootRegister)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "root_list_active",
+		Description: "List the agents actually working in this repository right now, what each holds, and how recently each was heard from. " +
+			"Consult this before you write to anyone: a root id you remembered from earlier may belong to an agent that has since died.",
+	}, s.rootListActive)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "root_heartbeat",
 		Description: "Refresh this root's liveness so its claims keep holding. Any tool call also does this.",
 	}, s.rootHeartbeat)
@@ -128,6 +134,20 @@ func New(version, globalPath string) (*mcp.Server, *Session) {
 
 	return srv, s
 }
+
+// A note on what is deliberately NOT here: an unread-mail notice appended to
+// every tool result.
+//
+// It is the obvious way to make delivery host-agnostic, and it was tried. It
+// cannot be done without breaking a contract this server keeps everywhere else:
+// a tool result's text IS its JSON body, exactly, so an agent can parse it
+// instead of reading prose and guessing. Appending "you have 2 unread messages"
+// to the end of that leaves a payload that is no longer JSON, and buys redundancy
+// at the price of the one property that makes every other tool dependable.
+//
+// Mail is delivered by the hooks instead — Stop on Claude, UserPromptSubmit and
+// PostToolUse on Codex — which reach the agent without touching what the tools
+// return. See internal/hooks/mail.go.
 
 // Run serves MCP over stdio until the host closes the connection, then ends the
 // root so its claims do not linger for the full TTL.

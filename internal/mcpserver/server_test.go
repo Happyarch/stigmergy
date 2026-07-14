@@ -450,7 +450,8 @@ func TestToolsAreAdvertisedWithSchemas(t *testing.T) {
 	}
 	want := map[string]bool{
 		"context_open": false, "root_register": false, "root_heartbeat": false,
-		"root_deregister": false, "memory_search": false, "memory_read": false,
+		"root_list_active": false,
+		"root_deregister":  false, "memory_search": false, "memory_read": false,
 		"memory_list": false, "memory_write": false, "memory_promote": false,
 		"memory_delete": false, "claim_acquire": false, "claim_check": false,
 		"claim_list_active": false, "claim_renew": false, "claim_release": false,

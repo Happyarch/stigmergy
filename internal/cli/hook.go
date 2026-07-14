@@ -21,9 +21,89 @@ func newHookCmd() *cobra.Command {
 		Long: "Hook handlers read a host's JSON payload on stdin and write a decision on stdout.\n" +
 			"They are wired up by `stigmergy init` and are not meant to be run directly.",
 	}
-	cmd.AddCommand(newClaimGuardCmd(), newRootGateCmd(), newSessionStartCmd(), newSessionEndCmd(), newHookDumpCmd())
+	cmd.AddCommand(newClaimGuardCmd(), newRootGateCmd(), newSessionStartCmd(), newSessionEndCmd(),
+		newMailGateCmd(), newMailNotifyCmd(), newHookDumpCmd())
 	cmd.AddCommand(newCodexHookCmds()...)
 	return cmd
+}
+
+// newMailGateCmd delivers mail at the end of a turn, by refusing to let the turn
+// end while there is undelivered mail.
+//
+// It is the answer to the mailbox's original defect: it was a pull channel with
+// nothing to pull it. An agent had to think to call mailbox_inbox, and an agent
+// deep in its own work does not — so messages sat unread, and the agent that sent
+// one waited on an answer that was never coming. Reminding the agent in its
+// instructions did not fix this, and could not: the instruction is read once, at
+// the start, and the mail arrives later.
+//
+// Blocking the Stop is the only place a message can be put in front of an agent
+// that is not asking for one. It costs the agent nothing when there is no mail —
+// which is almost always — and when there is, it arrives at the natural moment:
+// the agent has finished what it was doing and is about to walk away.
+func newMailGateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "mail-gate",
+		Short:        "Stop: hand the agent its mail before it finishes the turn",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			in, err := hooks.DecodeClaude(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "stigmergy: could not parse the hook payload: %v\n", err)
+				return nil
+			}
+			// The agent is only still running because we blocked it last time.
+			// Blocking again would trap it: it has been shown the mail, and what
+			// it does about it is now its own business.
+			if in.StopHookActive {
+				return nil
+			}
+			hooks.Heartbeat("claude-code", in.SessionID, in.CWD)
+
+			mail := hooks.CheckMail("claude-code", in.SessionID, in.CWD, true)
+			text := hooks.MailText(mail)
+			if text == "" {
+				return nil
+			}
+			return json.NewEncoder(os.Stdout).Encode(hooks.NewStopBlock(text))
+		},
+	}
+}
+
+// newMailNotifyCmd is the gentle half of delivery: it tells an agent what is
+// waiting as its turn begins, so mail informs the work rather than interrupting
+// it.
+//
+// It does not mark the mail delivered. A line of context an agent reads on its
+// way to doing something else has been mentioned, not delivered, and if that were
+// enough to satisfy the mailbox the Stop gate would never fire for it — which is
+// exactly the failure this is meant to prevent. So the same message will still
+// stop the turn at the end if the agent has not dealt with it, and this is only a
+// courtesy: a chance to handle it while it is still cheap.
+func newMailNotifyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "mail-notify",
+		Short:        "UserPromptSubmit: tell the agent what mail is waiting, and keep its claims alive",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			in, err := hooks.DecodeClaude(os.Stdin)
+			if err != nil {
+				return nil
+			}
+			// A prompt is proof of life: an agent that has been idle for an hour
+			// while its user was away is not a crashed agent, and must not lose
+			// its claims on the strength of a silence that was never its own.
+			hooks.Heartbeat("claude-code", in.SessionID, in.CWD)
+
+			text := hooks.MailText(hooks.CheckMail("claude-code", in.SessionID, in.CWD, false))
+			if text == "" {
+				return nil
+			}
+			return json.NewEncoder(os.Stdout).Encode(hooks.NewPromptContext(text))
+		},
+	}
 }
 
 // newClaimGuardCmd is the enforced path: Claude Code can deny a tool call
@@ -44,6 +124,12 @@ func newClaimGuardCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "stigmergy: could not parse the hook payload: %v\n", err)
 				return nil
 			}
+
+			// An edit is the clearest proof of life there is, and this hook fires
+			// on every one of them. That is what lets the root TTL be short enough
+			// for a dead agent's claims to lapse in minutes rather than an hour:
+			// a working agent proves it is alive by working.
+			hooks.Heartbeat("claude-code", in.SessionID, in.CWD)
 
 			d := hooks.Guard("claude-code", in.SessionID, in.CWD, in.EditedPaths())
 			if d.Allow {

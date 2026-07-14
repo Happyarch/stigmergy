@@ -72,6 +72,16 @@ see [§7](#7-the-asymmetry-is-inherent)).
 blocked agent has something to *do* other than wait or barge through: it can
 negotiate with the root that holds the claim.
 
+A mailbox nobody reads is not a coordination mechanism, so two properties are part of
+the design rather than the etiquette. **Mail is delivered**: the host hooks put unread
+messages in front of the agent — on Claude Code by refusing to let a turn end while a
+message has never been shown — because an agent deep in its own work will not think to
+call `mailbox_inbox`, and telling it to try harder does not change that. And **mail is
+addressed to the living**: a conflict names the owner *and* its liveness, `root_list_active`
+lists who is here, and a send to a root that has died is refused with the roster of
+those that have not. An agent reconstructing a root id from memory is how a message
+ends up delivered, perfectly, to nobody.
+
 **Audit log.** Who did what, kept 90 days. In particular it is the only record
 that a claim was actually *violated* (on Codex) rather than merely enforced.
 
@@ -227,17 +237,20 @@ CREATE TABLE mailbox_threads (
 );
 
 CREATE TABLE mailbox_messages (
-  id        INTEGER PRIMARY KEY,
-  thread_id INTEGER NOT NULL REFERENCES mailbox_threads(id),
-  from_root TEXT NOT NULL,
-  to_root   TEXT NOT NULL,
-  subject   TEXT NOT NULL,
-  body      TEXT NOT NULL,
-  sent_at   TEXT NOT NULL,
-  read_at   TEXT
+  id          INTEGER PRIMARY KEY,
+  thread_id   INTEGER NOT NULL REFERENCES mailbox_threads(id),
+  from_root   TEXT NOT NULL,
+  to_root     TEXT NOT NULL,
+  subject     TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  sent_at     TEXT NOT NULL,
+  read_at     TEXT,
+  notified_at TEXT              -- 0002: when stigmergy put this in front of the agent
 );
 
-CREATE INDEX idx_msgs_inbox ON mailbox_messages(to_root) WHERE read_at IS NULL;
+CREATE INDEX idx_msgs_inbox      ON mailbox_messages(to_root) WHERE read_at IS NULL;
+CREATE INDEX idx_msgs_unnotified ON mailbox_messages(to_root)
+  WHERE notified_at IS NULL AND read_at IS NULL;
 
 CREATE TABLE audit_log (
   id         INTEGER PRIMARY KEY,
@@ -254,6 +267,19 @@ CREATE INDEX idx_audit_at ON audit_log(at);
 
 `idx_audit_at` exists for GC, which deletes by age.
 
+`notified_at` and `read_at` look redundant and are not. `notified_at` is *stigmergy's*
+record — we put this message in front of the agent — and `read_at` is the *agent's* —
+it looked. Only the delivery hooks set the first; there is no tool for it, because an
+agent able to suppress its own notifications eventually would.
+
+Collapsing the two is what made the mailbox pull-only for so long: an unread message
+was indistinguishable from an undelivered one, so nothing in the system could tell
+whether an agent had ignored its mail or had simply never been told it had any. With
+them apart, the Stop hook can interrupt exactly once per message — it blocks on what
+has never been announced, stamps it, and lets the agent go. An agent that reads its
+mail and presses on regardless is not trapped in a loop; a message that arrives
+mid-turn still gets its one interruption.
+
 ---
 
 ## 5. Invariants
@@ -269,7 +295,7 @@ A claim is in force if and only if:
 c.released_at IS NULL
 AND c.expires_at > :now
 AND r.ended_at IS NULL
-AND r.last_seen_at > :cutoff     -- cutoff = now - RootTTL (1 hour)
+AND r.last_seen_at > :cutoff     -- cutoff = now - RootTTL (15 minutes)
 ```
 
 Read the last two lines again: **a claim is only alive while the root that holds it
@@ -282,6 +308,30 @@ to run in the background.
 
 This predicate is the reason there is no daemon. Do not replace it with a
 `status` column that something has to remember to update.
+
+### 5.1.1 Why the TTL is fifteen minutes, and what it costs
+
+The TTL is not a guess at how long an agent might idle. It is **how long a dead agent
+goes on looking alive**, and everything bad follows from that window: its claims keep
+blocking, and mail addressed to it is accepted and never read. It was an hour, and an
+hour is far too long to be blocked by a corpse.
+
+Shortening it was only possible because liveness stopped depending on an agent's
+goodwill. It used to be refreshed solely by MCP calls, so an agent heads-down in a long
+stretch of editing looked exactly like an agent that had crashed — which forced the TTL
+to cover the longest plausible silence. The hooks (`claim-guard`, `mail-gate`,
+`mail-notify`) now heartbeat on the agent's own activity: every edit, every turn. A
+working agent proves it is alive as a side effect of working, and silence finally means
+what it says.
+
+The price is paid at `heartbeat()`, and it is worth understanding. A root that has
+lapsed has had its claims declared free — the predicate above already ignores them, and
+another agent may have claimed the same path and started editing. If the original then
+returns and heartbeats, a bare `UPDATE roots SET last_seen_at` would bring those claims
+back to life, and two agents would each have been told the same file was theirs. So
+**coming back from the dead costs you your claims**: they are released, and the root
+must re-acquire — which is exactly the moment the overlap check runs and it learns the
+path is spoken for. The agent is welcome back. Its promises are not.
 
 ### 5.2 Claims are repo-wide, not worktree-scoped
 

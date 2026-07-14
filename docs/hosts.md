@@ -62,13 +62,15 @@ left alone rather than silently swallowed.
 
 ### `.claude/settings.json`
 
-Four hook entries:
+Six hook entries:
 
 | Event | Matcher | Command |
 |---|---|---|
 | `SessionStart` | — | `stigmergy hook session-start` |
+| `UserPromptSubmit` | — | `stigmergy hook mail-notify` |
 | `PreToolUse` | `Edit\|Write\|NotebookEdit` | `stigmergy hook claim-guard` |
 | `PreToolUse` | `mcp__stigmergy__(root_register\|root_heartbeat\|root_deregister\|memory_write\|memory_promote\|memory_delete\|claim_acquire\|claim_renew\|claim_release\|mailbox_.*)` | `stigmergy hook root-gate` |
+| `Stop` | — | `stigmergy hook mail-gate` |
 | `SessionEnd` | — | `stigmergy hook session-end` |
 
 It also sets:
@@ -156,10 +158,61 @@ exists at all is unverified.** If none does, this gate is advisory and the enfor
 explorer path is a read-only agent definition. Settle it with `stigmergy hook dump`:
 capture a root's payload and a subagent's, and diff them.
 
+**`mail-gate`** (`Stop`) is how the mailbox is actually delivered. When an agent
+tries to end its turn with mail it has never been shown, the hook returns
+`{"decision":"block","reason":"…"}` — the messages, who sent them, whether those
+senders are still alive, and what to do — and the agent goes on working instead of
+walking away from someone who is blocked on it.
+
+It has to be `Stop`, and this is worth being explicit about, because it is the only
+hook that reaches an agent which is not asking for anything. A mailbox nobody is told
+about is a pull channel with nothing pulling it: `mailbox_inbox` exists, the
+instructions say to check it, and an agent deep in its own work does not — so mail
+sits unread while its sender waits for an answer that is never coming. Telling the
+agent harder does not fix that. The instruction is read once, at the start; the mail
+arrives later.
+
+Two things keep the gate from becoming a nuisance:
+
+- **`stop_hook_active`.** If the agent is only still running because this hook blocked
+  it, the hook says nothing. Otherwise it would be a trap the agent could never leave.
+- **`notified_at`.** Each message interrupts exactly once. Delivery is stigmergy's
+  record that it put the mail in front of the agent — distinct from `read_at`, which is
+  the agent's record that it looked. An agent that reads its mail and decides to press
+  on is not nagged; a message that arrives mid-turn still gets its one interruption.
+
+**`mail-notify`** (`UserPromptSubmit`) is the gentle half: it injects the same summary
+as the turn begins, so mail can shape the work rather than interrupt it. It does *not*
+mark anything delivered — a line an agent skims on its way to doing something else has
+been mentioned, not delivered — so the gate will still stop the turn at the end if the
+message was ignored.
+
 **`session-end`** ends the root and releases its claims. It emits nothing and
 swallows every error: it is a courtesy, not a guarantee. The real safety net is the
-root TTL, which frees the claims of any root that goes quiet for an hour whether or
-not this hook ever ran.
+root TTL, which frees the claims of any root that goes quiet for fifteen minutes
+whether or not this hook ever ran.
+
+### Heartbeats, and why the TTL is short
+
+`claim-guard`, `mail-gate` and `mail-notify` all refresh the root's `last_seen_at`
+before doing anything else. That is not incidental bookkeeping — it is what pays for
+a fifteen-minute root TTL.
+
+Liveness used to depend on an agent choosing to call a stigmergy tool. An agent
+heads-down in a long stretch of editing therefore looked exactly like an agent that
+had crashed, so the TTL had to be generous enough to cover the longest plausible
+silence — an hour — and a genuinely dead agent then went on holding its claims, and
+accepting mail nobody would ever read, for that entire hour.
+
+Hooks break the trade. They fire on the agent's own activity, so a working agent
+proves it is alive as a side effect of working, and silence starts to mean what it
+says. The TTL can then be set to the thing that actually matters: how long a dead
+agent may keep blocking the living.
+
+The cost is that coming back from the dead costs you your claims. A root that lapses
+has had its paths declared free, and another agent may already have taken one; if the
+original wakes up and heartbeats, its old claims are released rather than resurrected,
+and it must re-acquire — which is the moment it discovers the path is spoken for.
 
 ---
 
@@ -207,8 +260,10 @@ If a `[mcp_servers.stigmergy]` section already exists *outside* the managed bloc
 | Event | Matcher | Command |
 |---|---|---|
 | `SessionStart` | `startup\|resume\|clear\|compact` | `stigmergy hook codex-session-start` |
+| `UserPromptSubmit` | — | `stigmergy hook codex-mail-notify` |
 | `PreToolUse` | `Edit\|Write` | `stigmergy hook codex-claim-warn` |
 | `PostToolUse` | `Edit\|Write` | `stigmergy hook codex-claim-stop` |
+| `PostToolUse` | `Edit\|Write` | `stigmergy hook codex-mail-notify` |
 
 `apply_patch` is addressable as `Edit|Write`.
 
@@ -265,6 +320,26 @@ plus:
 > Codex cannot block an edit to a claimed file before it happens. If you write to
 > one anyway, the turn is halted after the fact and you will have to undo the
 > change. Check claims yourself.
+
+**`codex-mail-notify`** delivers the mailbox — on `UserPromptSubmit` and after every
+edit, and **not** on `Stop`.
+
+Codex has a `Stop` event, and it is the wrong tool here. Its output is limited to
+`continue` / `stopReason` / `systemMessage`, and the manual describes `systemMessage`
+as a warning surfaced "in the UI or event stream": it reaches the human, with no
+promise it lands in the agent's context. Claude's `Stop` hook can block the turn and
+put the mail *into the conversation*; Codex's cannot. So the asymmetry is the same one
+that runs through the rest of this file, and it is stated rather than papered over:
+
+| | Claude Code | Codex |
+|---|---|---|
+| When mail arrives | end of turn, and the turn cannot end until it does | start of turn, and after each edit |
+| Can the agent finish while ignoring it | no | yes |
+
+Both hosts mark the mail delivered when they show it, because both channels demonstrably
+reach the agent — Codex's `PostToolUse` `systemMessage` is the same channel the claim
+halt relies on. What Codex does not get is the guarantee: on Claude an agent *cannot*
+walk away from an undelivered message, and on Codex it can.
 
 ### Codex hooks fail open — including when the database is broken
 

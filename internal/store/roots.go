@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -12,7 +13,25 @@ import (
 // Root activity TTL: a root that has not been heard from in this long is
 // treated as gone, and its claims stop blocking anyone. This is what makes a
 // crashed agent self-healing rather than a permanent lock.
-const RootTTL = 3600 * time.Second
+//
+// It is short on purpose. The TTL is not a guess at how long an agent might
+// idle — it is how long a *dead* agent goes on looking alive, and everything
+// bad follows from that window: its claims keep blocking, and mail addressed to
+// it is accepted and never read. Fifteen minutes is survivable; the hour this
+// used to be was not.
+//
+// What makes fifteen minutes safe is that liveness no longer depends on an
+// agent choosing to call stigmergy. The hooks heartbeat on every edit and every
+// turn (see hooks.Heartbeat), so an agent that is doing anything at all stays
+// live, and only one that has genuinely stopped goes silent.
+const RootTTL = 900 * time.Second
+
+// StaleRootSilence is when a root is still inside the TTL but has been quiet
+// long enough to be worth flagging. It changes no decision — a root inside the
+// TTL is live, full stop — but an agent about to negotiate with someone who has
+// not been heard from in twelve minutes deserves to know that before it commits
+// to waiting for an answer.
+const StaleRootSilence = 5 * time.Minute
 
 // StaleRootAge is when a silent root gets its ended_at stamped for good, during
 // opportunistic cleanup.
@@ -38,6 +57,58 @@ type Root struct {
 // RootTTLCutoff is the last_seen_at below which a root counts as inactive. It
 // appears in every active-claim predicate.
 func RootTTLCutoff() string { return Stamp(NowTime().Add(-RootTTL)) }
+
+// SilentFor is how long since this root was last heard from. A negative or
+// unparseable stamp reads as zero: a clock that has gone backwards is not
+// evidence that an agent is dead.
+func (r Root) SilentFor() time.Duration {
+	t, err := ParseStamp(r.LastSeenAt)
+	if err != nil {
+		return 0
+	}
+	if d := NowTime().Sub(t); d > 0 {
+		return d.Round(time.Second)
+	}
+	return 0
+}
+
+// Liveness describes a root the way an agent needs to hear it: not a timestamp,
+// but whether there is anybody there to answer.
+//
+// The distinction it draws is the one that matters when deciding who to write
+// to. "live" means mail will be read. "quiet" means the root is still inside the
+// TTL — so it holds its claims and can be written to — but has not been heard
+// from in a while, and may be about to lapse. An agent that knows the difference
+// can choose to wait out a claim rather than open a negotiation with a corpse.
+func (r Root) Liveness() string {
+	d := r.SilentFor()
+	switch {
+	case d >= RootTTL:
+		return fmt.Sprintf("gone (silent for %s)", short(d))
+	case d >= StaleRootSilence:
+		return fmt.Sprintf("quiet (last seen %s ago; lapses in %s if it stays silent)",
+			short(d), short(RootTTL-d))
+	default:
+		return fmt.Sprintf("live (last seen %s ago)", short(d))
+	}
+}
+
+// Live reports whether the root is inside the TTL: whether its claims bind and
+// its mail can be delivered.
+func (r Root) Live() bool { return r.SilentFor() < RootTTL }
+
+// short renders a duration the way a person says it. time.Duration's own String
+// gives "12m3.000000001s", which is not something to put in front of an agent.
+func short(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
 
 // Registration is a root_register request.
 type Registration struct {
@@ -199,14 +270,115 @@ func (d *DB) RootBySession(agentKind, sessionLabel string) (*Root, error) {
 // Heartbeat refreshes a root's liveness. Every registered call does this, so an
 // agent that is working never loses its claims to the TTL.
 func (d *DB) Heartbeat(rootID string) error {
-	res, err := d.Exec(`UPDATE roots SET last_seen_at = ? WHERE root_id = ? AND ended_at IS NULL`, Now(), rootID)
+	tx, err := d.Begin()
 	if err != nil {
-		return serr.Internalf(err, "failed to record heartbeat")
+		return serr.Internalf(err, "failed to begin transaction")
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNoRoot
+	defer tx.Rollback()
+	if err := heartbeat(tx, rootID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return serr.Internalf(err, "failed to commit heartbeat")
 	}
 	return nil
+}
+
+// HeartbeatSession refreshes liveness for a host session, without the caller
+// having to know its root id.
+//
+// This is the hook path. A hook knows the host's session id and nothing else —
+// it has no MCP session, no registered root, no memory of a previous call — so
+// resolving the root and refreshing it has to be one round trip. It returns
+// ErrNoRoot for an unregistered session, which hooks ignore: an agent that never
+// registered has no claims to keep alive, and nothing to heartbeat.
+func (d *DB) HeartbeatSession(agentKind, sessionLabel string) error {
+	if sessionLabel == "" {
+		return ErrNoRoot
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		return serr.Internalf(err, "failed to begin transaction")
+	}
+	defer tx.Rollback()
+
+	var rootID string
+	err = tx.QueryRow(
+		`SELECT root_id FROM roots
+		  WHERE agent_kind = ? AND session_label = ? AND ended_at IS NULL
+		  ORDER BY registered_at DESC LIMIT 1`, agentKind, sessionLabel).Scan(&rootID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoRoot
+	}
+	if err != nil {
+		return serr.Internalf(err, "failed to resolve the session's root")
+	}
+	if err := heartbeat(tx, rootID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return serr.Internalf(err, "failed to commit heartbeat")
+	}
+	return nil
+}
+
+// heartbeat refreshes a root, and releases its claims first if it had already
+// lapsed.
+//
+// A lapsed root's claims have stopped binding: the active predicate ignores
+// them, other agents have been told those paths are free, and one of them may
+// already have claimed and started editing. If the original root then comes back
+// — a long silence, then one tool call — a bare UPDATE of last_seen_at would
+// bring those claims back to life, and two agents would hold the same path, each
+// having been told it was theirs.
+//
+// So coming back from the dead costs you your claims. The agent is welcome, its
+// promises are not: it must re-acquire, which is the moment the overlap check
+// runs and it learns the path is spoken for. Silence is the only thing stigmergy
+// can read as absence, and this is what makes that reading safe.
+func heartbeat(tx *sql.Tx, rootID string) error {
+	var lastSeen string
+	err := tx.QueryRow(`SELECT last_seen_at FROM roots WHERE root_id = ? AND ended_at IS NULL`,
+		rootID).Scan(&lastSeen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoRoot
+	}
+	if err != nil {
+		return serr.Internalf(err, "failed to read the root")
+	}
+
+	now := Now()
+	if lastSeen <= RootTTLCutoff() {
+		res, err := tx.Exec(
+			`UPDATE claims SET released_at = ? WHERE root_id = ? AND released_at IS NULL`, now, rootID)
+		if err != nil {
+			return serr.Internalf(err, "failed to release the lapsed root's claims")
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			if err := audit(tx, AuditEntry{
+				Actor: rootID, Action: "root_lapsed_claims_released",
+				Detail: fmt.Sprintf("root returned after %s of silence; %d claim(s) released, it must re-acquire",
+					short(NowTime().Sub(mustParse(lastSeen))), n),
+			}); err != nil {
+				return serr.Internalf(err, "failed to write audit record")
+			}
+		}
+	}
+	if _, err := tx.Exec(`UPDATE roots SET last_seen_at = ? WHERE root_id = ?`, now, rootID); err != nil {
+		return serr.Internalf(err, "failed to record heartbeat")
+	}
+	return nil
+}
+
+// mustParse is for stamps that came out of our own database, where an
+// unparseable value is a bug rather than an input error. It reads as "now", so
+// the worst case is a silence reported as zero.
+func mustParse(stamp string) time.Time {
+	t, err := ParseStamp(stamp)
+	if err != nil {
+		return NowTime()
+	}
+	return t
 }
 
 // DeregisterRoot ends a root and releases everything it held. A clean exit

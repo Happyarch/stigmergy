@@ -32,7 +32,11 @@ and stigmergy never pretends otherwise). Claims expire on their own, and a crash
 agent's claims die with it.
 
 **Mailbox** — root-to-root messages, so a blocked agent can negotiate with the one
-holding the claim instead of waiting or barging through.
+holding the claim instead of waiting or barging through. Mail is *delivered*, not left
+to be found: on Claude Code an agent cannot end its turn while a message it has never
+been shown is waiting. And it is addressed to whoever is actually there — claim
+conflicts name the owner and say whether it is still alive, mail to a root that has
+died is refused, and the refusal names the agents that are.
 
 **Audit log** — who did what, kept 90 days.
 

@@ -47,6 +47,18 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 	if claims := activeClaimSummary(repo); claims != "" {
 		sb.WriteString("\nClaims currently held by other agents:\n")
 		sb.WriteString(claims)
+		sb.WriteString("\nThose root ids are the only agents you may write to. If one of them is in your way, " +
+			"address the root that holds the path — root_list_active tells you who is here and what they hold.\n")
+	}
+
+	// Mail survives a session. A root resumes on (agent_kind, worktree,
+	// session_label), so an agent that was compacted or cleared comes back to the
+	// same mailbox — and to whatever arrived while it was away. Unshown, that mail
+	// would wait for the end of the first turn; shown here, it can shape the work
+	// instead of interrupting it.
+	if text := MailText(CheckMail(agentKind, sessionID, cwd, false)); text != "" {
+		sb.WriteString("\n")
+		sb.WriteString(text)
 	}
 	return sb.String()
 }
@@ -71,7 +83,8 @@ func activeClaimSummary(repo *gitx.Repo) string {
 		if c.Recursive {
 			scope += "/**"
 		}
-		fmt.Fprintf(&sb, "  %s — %s (%s)\n", scope, c.Reason, c.RootID)
+		fmt.Fprintf(&sb, "  %s — %s\n    held by %s (%s), %s\n",
+			scope, c.Reason, c.RootID, c.AgentKind, c.OwnerLiveness)
 	}
 	return sb.String()
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 
 	"github.com/happyarch/stigmergy/internal/serr"
 )
@@ -22,11 +23,24 @@ type ThreadSummary struct {
 	State         string `json:"state"`
 	Resolution    string `json:"resolution,omitempty"`
 	With          string `json:"with"`            // the other root in the conversation
+	WithLiveness  string `json:"with_liveness"`   // whether they are still there to answer
 	Subject       string `json:"subject"`         // of the most recent message
 	LastMessageAt string `json:"last_message_at"` // when it was sent
 	LastFromSelf  bool   `json:"last_from_self"`  // true when the ball is in their court
 	Unread        int    `json:"unread"`          // messages to you that you have not read
 	Messages      int    `json:"messages"`
+}
+
+// Stalled reports a thread that is waiting on an answer nobody can give: the
+// ball is in the other agent's court, and that agent is gone.
+//
+// This is the failure the mailbox could not previously see. An agent that asks
+// for a file and gets no reply cannot distinguish "they are thinking about it"
+// from "they died an hour ago", so it waits — politely, indefinitely, on a claim
+// that has already lapsed. A stalled thread means: stop waiting. Whatever you
+// were asking permission for, nobody is holding it any more.
+func (t ThreadSummary) Stalled() bool {
+	return t.State == ThreadOpen && t.LastFromSelf && strings.HasPrefix(t.WithLiveness, "gone")
 }
 
 // Threads lists the conversations a root takes part in, most recently active
@@ -48,7 +62,15 @@ SELECT t.id, t.claim_id, t.state, COALESCE(t.resolution, ''),
        last.subject, last.sent_at, last.from_root = :self,
        (SELECT count(*) FROM mailbox_messages u
          WHERE u.thread_id = t.id AND u.to_root = :self AND u.read_at IS NULL),
-       (SELECT count(*) FROM mailbox_messages c WHERE c.thread_id = t.id)
+       (SELECT count(*) FROM mailbox_messages c WHERE c.thread_id = t.id),
+       -- The counterparty's liveness, so a thread can say not just who you are
+       -- waiting on but whether they are still there. The CASE is repeated rather
+       -- than aliased: SQLite will not let one select-list expression refer to
+       -- another's alias.
+       COALESCE((SELECT r.last_seen_at FROM roots r
+                  WHERE r.root_id = CASE WHEN last.from_root = :self THEN last.to_root ELSE last.from_root END), ''),
+       COALESCE((SELECT r.ended_at FROM roots r
+                  WHERE r.root_id = CASE WHEN last.from_root = :self THEN last.to_root ELSE last.from_root END), '')
   FROM mailbox_threads t
   JOIN mailbox_messages last
     ON last.id = (SELECT max(m2.id) FROM mailbox_messages m2 WHERE m2.thread_id = t.id)
@@ -73,12 +95,23 @@ SELECT t.id, t.claim_id, t.state, COALESCE(t.resolution, ''),
 	for rows.Next() {
 		var s ThreadSummary
 		var claimID sql.NullInt64
+		var other Root
+		var otherEnded string
 		if err := rows.Scan(&s.ID, &claimID, &s.State, &s.Resolution, &s.With,
-			&s.Subject, &s.LastMessageAt, &s.LastFromSelf, &s.Unread, &s.Messages); err != nil {
+			&s.Subject, &s.LastMessageAt, &s.LastFromSelf, &s.Unread, &s.Messages,
+			&other.LastSeenAt, &otherEnded); err != nil {
 			return nil, serr.Internalf(err, "failed to read a thread")
 		}
 		if claimID.Valid {
 			s.ClaimID = &claimID.Int64
+		}
+		switch {
+		case other.LastSeenAt == "":
+			s.WithLiveness = "unknown"
+		case otherEnded != "":
+			s.WithLiveness = "gone (ended its session)"
+		default:
+			s.WithLiveness = other.Liveness()
 		}
 		out = append(out, s)
 	}
