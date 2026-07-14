@@ -117,6 +117,48 @@ func TestHeartbeatFromAHookKeepsClaimsAlive(t *testing.T) {
 	Heartbeat("claude-code", "sess-worker", t.TempDir())
 }
 
+// TestHooksNeverMigrateTheSchema. The delivery hooks write — a heartbeat, a
+// notified_at stamp — and it would be very easy for that to mean "opened
+// read-write, therefore migrated". It must not.
+//
+// These hooks fire in every project an agent touches. A hook that migrated would
+// mean that installing a new stigmergy silently upgrades the schema of every
+// repository an agent visits, mid-edit, under a 250ms lock timeout, racing the
+// MCP server that another still-running session opened with the *old* binary.
+// Schema changes belong to init, doctor and the server, which can take their time
+// and say what they did.
+func TestHooksNeverMigrateTheSchema(t *testing.T) {
+	f := newFixture(t)
+	f.register(t, "claude-code", "sess-worker")
+
+	// Wind the database back to a schema this binary does not recognise, as an
+	// un-migrated project would be to a freshly-installed newer stigmergy.
+	latest, err := store.LatestVersion(store.Project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec(`DELETE FROM schema_migrations WHERE version = ?`, latest); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every hook path, against a schema it must refuse to touch.
+	Heartbeat("claude-code", "sess-worker", f.worktree)
+	if mail := CheckMail("claude-code", "sess-worker", f.worktree, true); !mail.empty() {
+		t.Error("a delivery hook read a database whose schema it does not recognise")
+	}
+	if text := SessionStartText("claude-code", "sess-worker", f.worktree); text == "" {
+		t.Error("session-start went silent; it must still tell the agent to register")
+	}
+
+	var version int
+	if err := f.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version == latest {
+		t.Fatalf("a hook migrated the database to v%d — schema changes are for init, doctor and the server", version)
+	}
+}
+
 // TestConflictNamesTheOwnerAndWhetherItCanAnswer: the blocked agent is told the
 // root id to write to at the moment it is blocked, so it never has to reconstruct
 // one from memory — which is how mail ends up addressed to an agent that died an

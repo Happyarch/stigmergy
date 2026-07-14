@@ -34,6 +34,7 @@ type DB struct {
 
 type options struct {
 	readOnly    bool
+	noMigrate   bool
 	busyTimeout int
 }
 
@@ -43,6 +44,21 @@ type Option func(*options)
 // ReadOnly opens the database without creating or migrating it. Used by the
 // hook fast path, which must never mutate schema.
 func ReadOnly() Option { return func(o *options) { o.readOnly = true } }
+
+// NoMigrate opens a database for writing but never migrates or creates it.
+//
+// It exists for the delivery hooks, which have to write — a heartbeat, a
+// notified_at stamp — but must not migrate, and the two used to be the same
+// switch. Migration is a schema change under a 250ms lock timeout, in the
+// agent's critical path, racing whatever else has the database open; it belongs
+// to `init`, `doctor` and the MCP server, which can take their time and report
+// what they did. A hook that quietly upgraded the schema of every project it
+// touched would be a very surprising thing to have installed.
+//
+// The caller is expected to check SchemaVersion against LatestVersion and do
+// nothing if they differ: an older database is one this binary must not write
+// to, and a newer one is one it cannot understand.
+func NoMigrate() Option { return func(o *options) { o.noMigrate = true } }
 
 // BusyTimeout overrides the default 5000ms lock wait. The hook path uses 250ms.
 func BusyTimeout(ms int) Option { return func(o *options) { o.busyTimeout = ms } }
@@ -73,7 +89,7 @@ func open(path string, kind Kind, meta map[string]string, opts ...Option) (*DB, 
 	for _, f := range opts {
 		f(&o)
 	}
-	if o.readOnly {
+	if o.readOnly || o.noMigrate {
 		if _, err := os.Stat(path); err != nil {
 			return nil, err
 		}
@@ -90,7 +106,7 @@ func open(path string, kind Kind, meta map[string]string, opts ...Option) (*DB, 
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	d := &DB{DB: db, Kind: kind, Path: path}
-	if !o.readOnly {
+	if !o.readOnly && !o.noMigrate {
 		if err := d.migrate(); err != nil {
 			db.Close()
 			return nil, err
