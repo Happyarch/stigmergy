@@ -1,7 +1,7 @@
 # Host integration
 
 What `stigmergy init` writes into a project, what the hooks send and receive, and
-where the two hosts differ. Source: `internal/hostcfg/` and `internal/hooks/`.
+where the hosts differ. Source: `internal/hostcfg/` and `internal/hooks/`.
 
 Read [§7 of architecture.md](architecture.md#7-the-asymmetry-is-inherent) first if
 you only read one thing: Claude Code can prevent a bad edit, and Codex cannot.
@@ -216,6 +216,102 @@ and it must re-acquire — which is the moment it discovers the path is spoken f
 
 ---
 
+## Google Antigravity
+
+`init --host antigravity` writes one self-contained plugin, and touches nothing else:
+
+```text
+.agents/plugins/stigmergy/
+├── plugin.json
+├── mcp_config.json
+├── hooks.json
+└── rules/stigmergy.md
+```
+
+This is the one place stigmergy gets an easier job than it does on Claude Code.
+Antigravity discovers plugins under `.agents/plugins/`, and a plugin carries its own
+MCP servers, hooks and rules — so `init` owns a directory rather than merging into
+files somebody else also writes, and `--remove` is one `RemoveAll` rather than the
+careful surgery `.claude/settings.json` needs. The workspace-wide
+`.agents/mcp_config.json` is deliberately left alone.
+
+### `hooks.json`
+
+| Event | Matcher | Command |
+|---|---|---|
+| `PreInvocation` | — (ignored) | `stigmergy hook antigravity-pre-invocation` |
+| `PreToolUse` | `write_to_file\|replace_file_content\|multi_replace_file_content` | `stigmergy hook antigravity-claim-guard` |
+| `PreToolUse` | the mutating stigmergy MCP tools | `stigmergy hook antigravity-root-gate` |
+| `Stop` | — (ignored) | `stigmergy hook antigravity-stop` |
+
+`PreToolUse` nests its handlers under a matcher; `PreInvocation` and `Stop` take theirs
+directly under the event key. Every documented write tool carries its target in
+`toolCall.args.TargetFile` — including `multi_replace_file_content`, whose several edits
+all land in one file.
+
+### The hooks
+- **`antigravity-pre-invocation`** replaces the `SessionStart` event Antigravity does not
+  have. On `invocationNum == 0` it injects the registration instructions; on every
+  invocation it injects pending mail as an `ephemeralMessage`. The `conversationId` is the
+  `session_label`.
+- **`antigravity-claim-guard`** denies the tool call outright, the same enforcement Claude
+  Code has. It resolves the repository from the *edited path*, not from
+  `workspacePaths[0]`: Antigravity reports every mounted workspace, and with two open, the
+  first one is not necessarily the one holding the file.
+- **`antigravity-root-gate`** is **inert on this host** — see below.
+- **`antigravity-stop`** delivers mail by returning `decision: "continue"`, which re-enters
+  the loop with the mail text as a system message. `fullyIdle` governs *deregistration*,
+  not delivery: an agent with background tasks still running has not finished, so its
+  claims are not released — but the loop is terminating either way, so its mail is handed
+  over regardless. No loop guard is needed, because the mail that caused a block is marked
+  delivered and cannot cause a second one.
+
+### The root gate does not work here, and cannot yet
+
+This is the asymmetry that matters on Antigravity, and it runs the opposite way to Codex's.
+
+An Antigravity subagent is **a separate conversation with its own `conversationId`**. It
+starts with a clean context, it can nest ten levels deep, and **no documented hook payload
+field links it to a parent** — the payloads carry `conversationId`, `workspacePaths`,
+`transcriptPath` and `artifactDirectoryPath`, and nothing else. So `SubagentEvidence` finds
+nothing, treats the caller as a root (the only safe direction: the alternative blocks the
+real root from ever writing memory), and the gate never denies.
+
+It is worse than a gate that does nothing. `PreInvocation` fires for the subagent's first
+model call too, so the registration text reaches it and tells it to register **as a root**,
+with its own id. Left alone, every subagent becomes a root that can claim files and write
+memory — a swarm of agents blocking each other's edits, which is the failure this tool
+exists to prevent.
+
+Nothing can enforce the boundary from the outside, so the boundary is a request — and it is
+aimed where Codex aims it: at the root, before the subagent exists. `rules/stigmergy.md`
+says to use `stigmergy explore` rather than `invoke_subagent`, the same instruction
+`AGENTS.md` carries for the same reason, one step worse. A second line, addressed to the
+subagent itself, tells it not to register if another agent invoked it; that one arrives
+through `PreInvocation` rather than the rules file, so it lands even if rule activation
+does not.
+
+Prevention at the root, backstop at the child. An agent knows whether a person invoked it;
+stigmergy does not.
+
+To settle it properly, run `stigmergy hook dump` against a real `invoke_subagent` call and
+read what the payload actually carries. If it names a parent, `antiSubagentKeys` in
+`internal/hooks/antigravity.go` is where that field goes, and the gate starts working with
+no other change. Until then, prefer `stigmergy explore` for read-only work here, for the
+same reason Codex does.
+
+### `rules/stigmergy.md` may not be loaded
+
+Antigravity activates a rule in one of four modes — Manual, Always On, Model Decision, or
+Glob. The docs do not say which applies to a rule that declares none, nor what syntax
+declares one. If the default is Manual, this file reaches nobody until it is `@`-mentioned.
+
+Nothing load-bearing rests on it: the `PreInvocation` hook injects the registration
+instructions itself, so an agent registers whether or not the rule was read. Verify the
+activation default before relying on the file for anything the hook does not also say.
+
+---
+
 ## Codex
 
 `init --host codex` touches three files — **and none of them take effect until you
@@ -331,14 +427,14 @@ promise it lands in the agent's context. Claude's `Stop` hook can block the turn
 put the mail *into the conversation*; Codex's cannot. So the asymmetry is the same one
 that runs through the rest of this file, and it is stated rather than papered over:
 
-| | Claude Code | Codex |
+| | Claude Code & Antigravity | Codex |
 |---|---|---|
 | When mail arrives | end of turn, and the turn cannot end until it does | start of turn, and after each edit |
 | Can the agent finish while ignoring it | no | yes |
 
 Both hosts mark the mail delivered when they show it, because both channels demonstrably
 reach the agent — Codex's `PostToolUse` `systemMessage` is the same channel the claim
-halt relies on. What Codex does not get is the guarantee: on Claude an agent *cannot*
+halt relies on. What Codex does not get is the guarantee: on Claude and Antigravity an agent *cannot*
 walk away from an undelivered message, and on Codex it can.
 
 ### Codex hooks fail open — including when the database is broken
@@ -396,6 +492,11 @@ the root's to write.
 
 On Claude Code, Task subagents already flow through `claim-guard` and `root-gate`,
 so no separate explorer mechanism is needed.
+
+On Antigravity they do not. A subagent there is its own conversation and no payload field
+identifies it, so the root gate never fires on it — `explore` is as useful here as it is on
+Codex, and for a sharper reason: an ungated Antigravity subagent does not merely inherit
+write access, it is actively invited to register as a root of its own.
 
 ---
 

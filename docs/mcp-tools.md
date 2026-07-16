@@ -121,14 +121,31 @@ not exist.
 
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
-| `agent_kind` | string | yes | `claude-code` or `codex` |
+| `agent_kind` | string | yes | which host you are: claude-code, codex, or antigravity |
 | `worktree` | string | yes | absolute path of the worktree you are in |
 | `branch` | string | no | if known |
 | `session_label` | string | no | **supply it** — see below |
+| `model` | string | no | which model you are — see below |
 | | | | State: **Opened** |
 
 **Returns** `root` (`root_id`, `agent_kind`, `session_label`, `worktree`, `branch`,
-`registered_at`, `last_seen_at`) and `resumed`.
+`model`, `registered_at`, `last_seen_at`) and `resumed`.
+
+`model` is asked, not detected, because there is nothing to detect: no hook payload and
+no MCP handshake carries it. `agent_kind` is the harness — two roots reading `claude-code`
+may be an Opus and a Haiku, and which one you are about to argue with over a file is
+usually the more useful fact. So the agent is asked to say, and the answer is taken at
+face value.
+
+Nothing validates it and nothing keys off it. Roots are identified by `root_id`; `model`
+is there so a person reading `stigmergy watch`, or an agent reading a claim conflict, can
+tell two agents in the same host apart. That is exactly why asking is acceptable: the cost
+of a wrong answer is one wrong line of output, and an agent has no reason to lie about
+what it is. It is optional, and a root that never answers registers as it always did.
+
+A resume may supply a `model` the original registration omitted — hosts restart the MCP
+server mid-session. A resume that stays silent keeps whatever it was last told rather than
+erasing it.
 
 **Errors** — `wrong_state`, `invalid_input` (bad `agent_kind`; non-absolute
 `worktree`).

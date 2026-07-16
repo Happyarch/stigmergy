@@ -4,7 +4,7 @@
 This project uses **stigmergy** for memory and coordination shared across every agent working here (Codex and Claude Code alike).
 
 - **Memory lives in stigmergy, not in Codex's own memories.** Use `memory_search` before starting work, and record durable facts with `memory_write`.
-- **Register at the start of every session**: `context_open`, then `root_register` with your session id as `session_label`.
+- **Register at the start of every session**: `context_open`, then `root_register` with your session id as `session_label`, and your own model id as `model` (the harness is `agent_kind`; `model` is you).
 - **Claim before you edit** anything another agent might touch: `claim_acquire`, and check with `claim_check` if you are unsure.
 - **Claims cannot be enforced before an edit here.** Codex hooks may warn, but they cannot block a write in advance. If you edit a file another agent has claimed, the turn is halted *after* the edit lands and the work may have to be undone. Check claims yourself; nothing else will stop you.
 - **When a claim blocks you**, negotiate with `mailbox_send`, or work elsewhere.

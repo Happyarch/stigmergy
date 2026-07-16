@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
@@ -82,11 +83,56 @@ func (d *DB) migrate() error {
 	if err != nil {
 		return err
 	}
+	var pending []migration
 	for _, m := range ms {
-		if m.version <= current {
-			continue
+		if m.version > current {
+			pending = append(pending, m)
 		}
-		tx, err := d.Begin()
+	}
+	if len(pending) == 0 {
+		// The overwhelmingly common case: an up-to-date database, opened. It
+		// must cost nothing, and in particular must not touch the pragmas an
+		// established connection is already running under.
+		return nil
+	}
+	return d.applyPending(pending)
+}
+
+// applyPending runs the outstanding migrations on a single pinned connection.
+//
+// The pinning is the point. A table rebuild — the only way SQLite can change a
+// CHECK constraint — needs legacy_alter_table=ON, so that renaming a table to
+// get it out of the way does not rewrite every child table's REFERENCES clause
+// to follow it; and it needs foreign_keys=OFF, so that dropping the old table
+// is not itself a violation. Both are connection state, and setting them on
+// *sql.DB only reaches whichever connection the pool happens to hand out.
+// SetMaxOpenConns(1) makes that one connection in practice, but "in practice"
+// is not a guarantee the schema should rest on, and a pragma that silently
+// applied to a different connection than the transaction would corrupt every
+// foreign key in the database rather than fail.
+func (d *DB) applyPending(pending []migration) (err error) {
+	ctx := context.Background()
+	conn, err := d.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA legacy_alter_table = ON`); err != nil {
+		return err
+	}
+	defer func() {
+		// Restore the connection to the state the DSN established, so it is
+		// safe to hand back to the pool whether or not the migration worked.
+		_, _ = conn.ExecContext(ctx, `PRAGMA legacy_alter_table = OFF`)
+		_, _ = conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	}()
+
+	for _, m := range pending {
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}

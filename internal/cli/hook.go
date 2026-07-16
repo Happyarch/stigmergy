@@ -17,13 +17,14 @@ import (
 func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hook",
-		Short: "Host hook handlers (invoked by Claude Code and Codex, not by hand)",
+		Short: "Host hook handlers (invoked by Claude Code, Codex and Antigravity, not by hand)",
 		Long: "Hook handlers read a host's JSON payload on stdin and write a decision on stdout.\n" +
 			"They are wired up by `stigmergy init` and are not meant to be run directly.",
 	}
 	cmd.AddCommand(newClaimGuardCmd(), newRootGateCmd(), newSessionStartCmd(), newSessionEndCmd(),
 		newMailGateCmd(), newMailNotifyCmd(), newHookDumpCmd())
 	cmd.AddCommand(newCodexHookCmds()...)
+	cmd.AddCommand(newAntigravityHookCmds()...)
 	return cmd
 }
 

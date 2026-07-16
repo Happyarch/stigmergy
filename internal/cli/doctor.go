@@ -164,22 +164,47 @@ func runDoctor(out io.Writer, gc bool) error {
 func checkHostConfig(d *diag, worktree string) {
 	mcpPath, settingsPath, claudeMemory := hostcfg.ClaudePaths(worktree)
 	codexConfig, codexHooks, codexMemory := hostcfg.CodexPaths(worktree)
+	_, _, _, antigravityRules := hostcfg.AntigravityPaths(worktree)
+
+	antigravityMCP, antigravityHooks := antigravityConfigPaths(worktree)
 
 	claude := fileContains(mcpPath, "stigmergy") && fileContains(settingsPath, "stigmergy hook")
 	codex := fileContains(codexConfig, "mcp_servers.stigmergy") && fileContains(codexHooks, "stigmergy hook")
+	// The same standard the other two are held to: a directory proves nothing,
+	// and a half-written plugin that reports "configured" is worse than one that
+	// reports nothing, because it is the answer someone stops investigating at.
+	antigravity := fileContains(antigravityMCP, "stigmergy") && fileContains(antigravityHooks, "stigmergy hook")
 
-	switch {
-	case claude && codex:
-		d.pass("both Claude Code and Codex are configured")
-	case claude:
-		d.pass("Claude Code is configured")
-		d.warn("Codex is not configured here — run `stigmergy init --host codex` if you use it")
-	case codex:
-		d.pass("Codex is configured")
-		d.warn("Claude Code is not configured here — run `stigmergy init --host claude` if you use it")
-	default:
+	hosts := []struct {
+		name       string
+		configured bool
+		flag       string
+	}{
+		{"Claude Code", claude, "claude"},
+		{"Codex", codex, "codex"},
+		{"Antigravity", antigravity, "antigravity"},
+	}
+
+	var configured []string
+	for _, h := range hosts {
+		if h.configured {
+			configured = append(configured, h.name)
+		}
+	}
+
+	switch len(configured) {
+	case 0:
 		d.fail("no host is configured — the database exists but no agent will use it")
 		d.note("Run `stigmergy init`.")
+	case 1:
+		d.pass("%s is configured", configured[0])
+	default:
+		d.pass("%s are configured", joinWords(configured))
+	}
+	for _, h := range hosts {
+		if !h.configured && len(configured) > 0 {
+			d.warn("%s is not configured here — run `stigmergy init --host %s` if you use it", h.name, h.flag)
+		}
 	}
 
 	if claude && !hostcfg.HasMarkerBlock(claudeMemory) {
@@ -199,6 +224,9 @@ func checkHostConfig(d *diag, worktree string) {
 	if codex {
 		d.note("Codex loads project hooks only for TRUSTED projects: trust this project in Codex")
 		d.note("and review the hooks with /hooks, or none of this takes effect there.")
+	}
+	if antigravity && !hostcfg.HasMarkerBlock(antigravityRules) {
+		d.warn("rules/stigmergy.md has no stigmergy block — Antigravity agents will not be told to use it")
 	}
 }
 
@@ -220,6 +248,27 @@ func fileContains(path, needle string) bool {
 		return false
 	}
 	return strings.Contains(string(data), needle)
+}
+
+// antigravityConfigPaths returns the two files that decide whether the
+// Antigravity plugin is really installed: the MCP server registration and the
+// hooks. The plugin directory existing says only that something once ran.
+func antigravityConfigPaths(worktree string) (mcpConfig, hooksJSON string) {
+	_, mcp, hooks, _ := hostcfg.AntigravityPaths(worktree)
+	return mcp, hooks
+}
+
+func joinWords(words []string) string {
+	switch len(words) {
+	case 0:
+		return ""
+	case 1:
+		return words[0]
+	case 2:
+		return words[0] + " and " + words[1]
+	default:
+		return strings.Join(words[:len(words)-1], ", ") + ", and " + words[len(words)-1]
+	}
 }
 
 func countMemories(db *store.DB) (int, error) {

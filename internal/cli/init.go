@@ -35,8 +35,8 @@ func newInitCmd() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if host != "all" && host != "claude" && host != "codex" {
-				return fmt.Errorf("--host must be all, claude, or codex, got %q", host)
+			if host != "all" && host != "claude" && host != "codex" && host != "antigravity" {
+				return fmt.Errorf("--host must be all, claude, codex, or antigravity, got %q", host)
 			}
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -63,7 +63,7 @@ func newInitCmd() *cobra.Command {
 			return maybeImportLegacyMemories(out, os.Stdin, repo, noInput)
 		},
 	}
-	cmd.Flags().StringVar(&host, "host", "all", "which hosts to configure: all, claude, or codex")
+	cmd.Flags().StringVar(&host, "host", "all", "which hosts to configure: all, claude, codex, or antigravity")
 	cmd.Flags().BoolVar(&remove, "remove", false, "remove stigmergy's configuration from this repository")
 	cmd.Flags().BoolVar(&noInput, "no-input", false, "never prompt; print what to run instead")
 	cmd.Flags().BoolVar(&purgeDB, "purge-db", false, "with --remove: also delete the project database and every memory in it")
@@ -122,6 +122,19 @@ func runInit(out io.Writer, repo *gitx.Repo, host string) error {
 		fmt.Fprintln(out)
 	}
 
+	if host == "all" || host == "antigravity" {
+		if err := hostcfg.InstallAntigravity(repo.WorktreeRoot); err != nil {
+			return fmt.Errorf("could not configure Antigravity: %w", err)
+		}
+		pluginDir := hostcfg.AntigravityPluginDir(repo.WorktreeRoot)
+		fmt.Fprintln(out, "Antigravity")
+		fmt.Fprintf(out, "  %s\n", pluginDir)
+		fmt.Fprintln(out, "  (plugin.json, mcp_config.json, hooks.json, rules/stigmergy.md)")
+		fmt.Fprintln(out, "  Antigravity reads the plugin automatically from .agents/plugins/.")
+		fmt.Fprintln(out, "  Your conversationId is the session_label for root_register — the pre-invocation hook tells you it.")
+		fmt.Fprintln(out)
+	}
+
 	fmt.Fprintln(out, "Restart any running agent sessions so they pick up the new configuration.")
 	fmt.Fprintln(out, "Check the installation with `stigmergy doctor`.")
 	return nil
@@ -139,6 +152,12 @@ func runRemove(out io.Writer, repo *gitx.Repo, host string, purgeDB, yes bool) e
 			return fmt.Errorf("could not remove the Codex configuration: %w", err)
 		}
 		fmt.Fprintln(out, "Removed stigmergy from the Codex configuration.")
+	}
+	if host == "all" || host == "antigravity" {
+		if err := hostcfg.RemoveAntigravity(repo.WorktreeRoot); err != nil {
+			return fmt.Errorf("could not remove the Antigravity configuration: %w", err)
+		}
+		fmt.Fprintln(out, "Removed stigmergy from the Antigravity configuration.")
 	}
 
 	dbPath := store.ProjectDBPath(repo.CommonDir)

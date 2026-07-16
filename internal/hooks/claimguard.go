@@ -145,7 +145,12 @@ func ConflictDetail(conflicts []store.Claim) string {
 	var sb strings.Builder
 	for _, c := range conflicts {
 		fmt.Fprintf(&sb, "  %s is claimed by root %s", c.ScopePath, c.RootID)
-		if c.AgentKind != "" {
+		// Who you are about to argue with, as specifically as we can say it:
+		// the harness, and the model behind it if it told us.
+		switch {
+		case c.AgentKind != "" && c.OwnerModel != "":
+			fmt.Fprintf(&sb, " (%s, %s)", c.AgentKind, c.OwnerModel)
+		case c.AgentKind != "":
 			fmt.Fprintf(&sb, " (%s)", c.AgentKind)
 		}
 		fmt.Fprintf(&sb, "\n    reason:   %s\n    worktree: %s\n", c.Reason, c.Worktree)

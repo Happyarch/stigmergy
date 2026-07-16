@@ -35,10 +35,17 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 
 	var sb strings.Builder
 	sb.WriteString("This project uses stigmergy for shared memory and coordination between agents.\n\n")
+	// model is left as a placeholder rather than filled in: this text is written
+	// by a hook, which knows the harness and cannot know the model. The agent is
+	// the only one who can answer, so the call is handed to it with the one gap
+	// only it can close.
 	fmt.Fprintf(&sb, "Register now, before your first edit:\n"+
 		"  1. context_open(project_root=%q)\n"+
-		"  2. root_register(agent_kind=%q, worktree=%q, session_label=%q)\n\n",
+		"  2. root_register(agent_kind=%q, worktree=%q, session_label=%q, model=\"<your model id>\")\n\n",
 		repo.WorktreeRoot, agentKind, repo.WorktreeRoot, sessionID)
+	sb.WriteString("Fill in model with your own model id — what you actually are, not the harness. " +
+		"It is never checked and nothing depends on it; it is so a person reading the roster can tell " +
+		"two agents in the same host apart.\n\n")
 	sb.WriteString("Use session_label exactly as given: it is how stigmergy knows which claims are yours. " +
 		"Until you register, every claim in the repository — including any you made earlier — will block your edits.\n\n")
 	sb.WriteString("Then: memory_search before starting work, and claim_acquire before editing files others might touch. " +
@@ -83,8 +90,12 @@ func activeClaimSummary(repo *gitx.Repo) string {
 		if c.Recursive {
 			scope += "/**"
 		}
+		who := c.AgentKind
+		if c.OwnerModel != "" {
+			who += ", " + c.OwnerModel
+		}
 		fmt.Fprintf(&sb, "  %s — %s\n    held by %s (%s), %s\n",
-			scope, c.Reason, c.RootID, c.AgentKind, c.OwnerLiveness)
+			scope, c.Reason, c.RootID, who, c.OwnerLiveness)
 	}
 	return sb.String()
 }

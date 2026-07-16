@@ -38,7 +38,7 @@ const StaleRootSilence = 5 * time.Minute
 const StaleRootAge = 7 * 24 * time.Hour
 
 // AgentKinds is the closed set enforced by the schema.
-var AgentKinds = []string{"claude-code", "codex"}
+var AgentKinds = []string{"claude-code", "codex", "antigravity"}
 
 // ErrNoRoot reports an unknown or already-ended root.
 var ErrNoRoot = errors.New("store: root not found")
@@ -50,6 +50,9 @@ type Root struct {
 	SessionLabel string `json:"session_label,omitempty"`
 	Worktree     string `json:"worktree"`
 	Branch       string `json:"branch,omitempty"`
+	// Model is what the agent says it is, and is never checked. See
+	// Registration.Model.
+	Model        string `json:"model,omitempty"`
 	RegisteredAt string `json:"registered_at"`
 	LastSeenAt   string `json:"last_seen_at"`
 }
@@ -117,11 +120,17 @@ type Registration struct {
 	Worktree     string
 	Branch       string
 	SessionLabel string
+	// Model is the agent's own account of which model it is — "claude-opus-4-8",
+	// "gemini-3-pro". It is optional, unvalidated, and load-bearing for nothing:
+	// agent_kind is the harness, and only the agent knows what is behind it.
+	// Asking is the only way to find out, and a wrong answer costs a line of
+	// roster output, so it is not worth defending against.
+	Model string
 }
 
 func (r Registration) validate() error {
 	if !contains(AgentKinds, r.AgentKind) {
-		return serr.E(serr.InvalidInput, "agent_kind %q is invalid: must be \"claude-code\" or \"codex\"", r.AgentKind)
+		return serr.E(serr.InvalidInput, "agent_kind %q is invalid: must be \"claude-code\", \"codex\", or \"antigravity\"", r.AgentKind)
 	}
 	if !filepath.IsAbs(r.Worktree) {
 		return serr.E(serr.InvalidInput, "worktree must be an absolute path, got %q", r.Worktree)
@@ -138,11 +147,11 @@ func contains(set []string, v string) bool {
 	return false
 }
 
-const rootCols = `root_id, agent_kind, COALESCE(session_label, ''), worktree, COALESCE(branch, ''), registered_at, last_seen_at`
+const rootCols = `root_id, agent_kind, COALESCE(session_label, ''), worktree, COALESCE(branch, ''), COALESCE(model, ''), registered_at, last_seen_at`
 
 func scanRoot(row interface{ Scan(...any) error }) (*Root, error) {
 	var r Root
-	err := row.Scan(&r.RootID, &r.AgentKind, &r.SessionLabel, &r.Worktree, &r.Branch, &r.RegisteredAt, &r.LastSeenAt)
+	err := row.Scan(&r.RootID, &r.AgentKind, &r.SessionLabel, &r.Worktree, &r.Branch, &r.Model, &r.RegisteredAt, &r.LastSeenAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoRoot
 	}
@@ -180,9 +189,17 @@ func (d *DB) RegisterRoot(reg Registration) (root *Root, resumed bool, err error
 			reg.AgentKind, reg.Worktree, reg.SessionLabel, RootTTLCutoff()))
 		switch {
 		case err == nil:
-			if _, err := tx.Exec(`UPDATE roots SET last_seen_at = ?, branch = ? WHERE root_id = ?`,
-				now, nullStr(reg.Branch), existing.RootID); err != nil {
+			// A resuming session may report a model the first one did not, or a
+			// different one: the host can be restarted onto another model mid
+			// session. COALESCE keeps the last non-empty answer rather than
+			// letting a silent resume erase what an earlier one told us.
+			if _, err := tx.Exec(
+				`UPDATE roots SET last_seen_at = ?, branch = ?, model = COALESCE(?, model) WHERE root_id = ?`,
+				now, nullStr(reg.Branch), nullStr(reg.Model), existing.RootID); err != nil {
 				return nil, false, serr.Internalf(err, "failed to refresh root")
+			}
+			if reg.Model != "" {
+				existing.Model = reg.Model
 			}
 			if err := audit(tx, AuditEntry{
 				Actor: existing.RootID, AgentKind: reg.AgentKind, Action: "root_resume",
@@ -202,9 +219,10 @@ func (d *DB) RegisterRoot(reg Registration) (root *Root, resumed bool, err error
 	}
 
 	if _, err := tx.Exec(
-		`INSERT INTO roots(root_id, agent_kind, session_label, worktree, branch, registered_at, last_seen_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		reg.RootID, reg.AgentKind, nullStr(reg.SessionLabel), reg.Worktree, nullStr(reg.Branch), now, now,
+		`INSERT INTO roots(root_id, agent_kind, session_label, worktree, branch, model, registered_at, last_seen_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		reg.RootID, reg.AgentKind, nullStr(reg.SessionLabel), reg.Worktree, nullStr(reg.Branch),
+		nullStr(reg.Model), now, now,
 	); err != nil {
 		return nil, false, serr.Internalf(err, "failed to register root")
 	}
@@ -219,7 +237,8 @@ func (d *DB) RegisterRoot(reg Registration) (root *Root, resumed bool, err error
 	}
 	return &Root{
 		RootID: reg.RootID, AgentKind: reg.AgentKind, SessionLabel: reg.SessionLabel,
-		Worktree: reg.Worktree, Branch: reg.Branch, RegisteredAt: now, LastSeenAt: now,
+		Worktree: reg.Worktree, Branch: reg.Branch, Model: reg.Model,
+		RegisteredAt: now, LastSeenAt: now,
 	}, false, nil
 }
 

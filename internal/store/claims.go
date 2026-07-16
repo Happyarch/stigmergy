@@ -28,11 +28,15 @@ type Claim struct {
 	Recursive bool   `json:"recursive"`
 	RootID    string `json:"root_id"`
 	AgentKind string `json:"agent_kind"`
-	Worktree  string `json:"worktree"`
-	Branch    string `json:"branch,omitempty"`
-	Reason    string `json:"reason"`
-	CreatedAt string `json:"created_at"`
-	ExpiresAt string `json:"expires_at"`
+	// OwnerModel is what the holder said it was, if it said. Advisory, like
+	// every other use of it: it tells an agent who it is about to negotiate
+	// with, and decides nothing.
+	OwnerModel string `json:"owner_model,omitempty"`
+	Worktree   string `json:"worktree"`
+	Branch     string `json:"branch,omitempty"`
+	Reason     string `json:"reason"`
+	CreatedAt  string `json:"created_at"`
+	ExpiresAt  string `json:"expires_at"`
 	// OwnerLiveness is how recently the owner was heard from. A claim names
 	// whoever took it, but "who holds this" and "who can answer me about it" are
 	// different questions, and an agent that is about to negotiate needs the
@@ -54,7 +58,7 @@ func (c Claim) Scope() claims.Scope {
 // must not hold the repository hostage, so root liveness is part of the
 // predicate rather than something a cleanup daemon has to catch up on.
 const activeClaims = `
-SELECT c.id, c.scope_path, c.recursive, c.root_id, r.agent_kind, c.worktree,
+SELECT c.id, c.scope_path, c.recursive, c.root_id, r.agent_kind, COALESCE(r.model, ''), c.worktree,
        COALESCE(c.branch, ''), c.reason, c.created_at, c.expires_at, r.last_seen_at
   FROM claims c JOIN roots r ON r.root_id = c.root_id
  WHERE c.released_at IS NULL
@@ -68,7 +72,7 @@ func scanClaims(rows *sql.Rows, selfRoot string) ([]Claim, error) {
 	for rows.Next() {
 		var c Claim
 		var owner Root
-		if err := rows.Scan(&c.ID, &c.ScopePath, &c.Recursive, &c.RootID, &c.AgentKind,
+		if err := rows.Scan(&c.ID, &c.ScopePath, &c.Recursive, &c.RootID, &c.AgentKind, &c.OwnerModel,
 			&c.Worktree, &c.Branch, &c.Reason, &c.CreatedAt, &c.ExpiresAt, &owner.LastSeenAt); err != nil {
 			return nil, serr.Internalf(err, "failed to read claims")
 		}

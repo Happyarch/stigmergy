@@ -1,0 +1,48 @@
+{
+  "stigmergy-claim-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stigmergy hook antigravity-claim-guard",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "stigmergy-root-gate": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__stigmergy__(root_register|root_heartbeat|root_deregister|memory_write|memory_promote|memory_delete|claim_acquire|claim_renew|claim_release|mailbox_.*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stigmergy hook antigravity-root-gate",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "stigmergy-pre-invocation": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "stigmergy hook antigravity-pre-invocation",
+        "timeout": 5
+      }
+    ]
+  },
+  "stigmergy-stop": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "stigmergy hook antigravity-stop",
+        "timeout": 10
+      }
+    ]
+  }
+}

@@ -116,8 +116,9 @@ func renderSnapshot(out io.Writer, s *Snapshot) {
 		fmt.Fprintln(out, "  nobody is working here right now")
 	}
 	for _, r := range s.Roots {
-		fmt.Fprintf(out, "  %-14s %-12s %-14s %-12s seen %s\n",
-			r.RootID, r.AgentKind, dash(r.Branch), dash(r.SessionLabel), since(now, r.LastSeenAt))
+		fmt.Fprintf(out, "  %-14s %-12s %-18s %-14s %-12s seen %s\n",
+			r.RootID, r.AgentKind, dash(r.Model), dash(r.Branch), dash(r.SessionLabel),
+			since(now, r.LastSeenAt))
 	}
 
 	fmt.Fprintf(out, "\nCLAIMS (%d)\n", len(s.Claims))

@@ -91,11 +91,17 @@ func (s *Session) contextOpen(_ context.Context, _ *mcp.CallToolRequest, in Cont
 }
 
 // RootRegisterInput registers (or resumes) a root session.
+//
+// Model is asked rather than detected because there is nothing to detect: no
+// hook payload and no MCP handshake carries it, and agent_kind names only the
+// harness. The answer is unverified and nothing keys off it, which is exactly
+// why asking is fine — the cost of a wrong one is a wrong line in the roster.
 type RootRegisterInput struct {
-	AgentKind    string `json:"agent_kind" jsonschema:"which host you are: claude-code or codex"`
+	AgentKind    string `json:"agent_kind" jsonschema:"which host you are: claude-code, codex, or antigravity"`
 	Worktree     string `json:"worktree" jsonschema:"absolute path of the worktree you are working in"`
 	Branch       string `json:"branch,omitempty" jsonschema:"branch you are on, if known"`
 	SessionLabel string `json:"session_label,omitempty" jsonschema:"your host session id; supply it so your own edits are not blocked by your own claims"`
+	Model        string `json:"model,omitempty" jsonschema:"which model you are: your own model id, such as claude-opus-4-8 or gemini-3-pro. agent_kind is the harness; this is you. Say what you actually are - if you are unsure of your exact id, give your best answer rather than omitting it, and never copy the example"`
 }
 
 // RootRegisterOutput carries the root identity other agents address you by.
@@ -121,6 +127,7 @@ func (s *Session) rootRegister(_ context.Context, _ *mcp.CallToolRequest, in Roo
 		Worktree:     in.Worktree,
 		Branch:       in.Branch,
 		SessionLabel: in.SessionLabel,
+		Model:        in.Model,
 	})
 	if err != nil {
 		return nil, RootRegisterOutput{}, toolError(err)
@@ -138,13 +145,18 @@ type RootListActiveOutput struct {
 // ActiveRoot is another agent, described the way you need it described in order
 // to decide whether to write to it.
 type ActiveRoot struct {
-	RootID    string   `json:"root_id"`
-	AgentKind string   `json:"agent_kind"`
-	Worktree  string   `json:"worktree"`
-	Branch    string   `json:"branch,omitempty"`
-	Liveness  string   `json:"liveness"`
-	Holds     []string `json:"holds"`
-	IsYou     bool     `json:"is_you"`
+	RootID    string `json:"root_id"`
+	AgentKind string `json:"agent_kind"`
+	// Model is what this agent said it was, when it said anything. This is the
+	// roster an agent reads before deciding who to write to, so it is the place
+	// the answer is worth the most: agent_kind tells you the harness, and two
+	// claude-code roots can be very different correspondents.
+	Model    string   `json:"model,omitempty"`
+	Worktree string   `json:"worktree"`
+	Branch   string   `json:"branch,omitempty"`
+	Liveness string   `json:"liveness"`
+	Holds    []string `json:"holds"`
+	IsYou    bool     `json:"is_you"`
 }
 
 // rootListActive answers the question an agent has to get right before it can
@@ -189,7 +201,8 @@ func (s *Session) rootListActive(_ context.Context, _ *mcp.CallToolRequest, _ st
 			holds = []string{}
 		}
 		out.Roots = append(out.Roots, ActiveRoot{
-			RootID: r.RootID, AgentKind: r.AgentKind, Worktree: r.Worktree, Branch: r.Branch,
+			RootID: r.RootID, AgentKind: r.AgentKind, Model: r.Model,
+			Worktree: r.Worktree, Branch: r.Branch,
 			Liveness: r.Liveness(), Holds: holds, IsYou: r.RootID == s.actor(),
 		})
 	}
