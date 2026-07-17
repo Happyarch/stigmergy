@@ -23,6 +23,40 @@ func TestEveryHostIsFullyDeclared(t *testing.T) {
 	}
 }
 
+func TestSelfRegistrationReadsTheHostSession(t *testing.T) {
+	env := map[string]string{"CLAUDE_CODE_SESSION_ID": "sess-1", "CLAUDE_PROJECT_DIR": "/repo"}
+	h, id, dir, ok := SelfRegistration(func(k string) string { return env[k] })
+	if !ok {
+		t.Fatal("a host session present in the environment was not detected")
+	}
+	if h.Kind != "claude-code" {
+		t.Errorf("detected the wrong host: %q", h.Kind)
+	}
+	if id != "sess-1" || dir != "/repo" {
+		t.Errorf("read the wrong values: id=%q dir=%q", id, dir)
+	}
+}
+
+func TestSelfRegistrationIsAbsentWithoutTheEnv(t *testing.T) {
+	if _, _, _, ok := SelfRegistration(func(string) string { return "" }); ok {
+		t.Error("SelfRegistration reported a host with nothing in the environment")
+	}
+}
+
+// A self-registering host must declare both variables: the session id to
+// register under and the project root to open. One without the other cannot
+// bootstrap, and silently half-working is worse than not trying.
+func TestSelfRegisteringHostsDeclareBothEnvVars(t *testing.T) {
+	for _, h := range All() {
+		if h.SessionEnv == "" && h.ProjectEnv == "" {
+			continue
+		}
+		if h.SessionEnv == "" || h.ProjectEnv == "" {
+			t.Errorf("%s declares only one of SessionEnv/ProjectEnv: %q / %q", h.Name, h.SessionEnv, h.ProjectEnv)
+		}
+	}
+}
+
 func TestKindsAndFlagsAreUnique(t *testing.T) {
 	seen := map[string]string{}
 	for _, h := range All() {

@@ -92,6 +92,19 @@ type Host struct {
 	Mail      Mail
 	Subagents Subagents
 
+	// SessionEnv and ProjectEnv are the environment variables the host exports
+	// its session id and project root in, or "" if it exports neither. When both
+	// are set the MCP server reads them at startup and registers the root itself
+	// — the agent never runs the context_open/root_register handshake it
+	// routinely forgets, and the claim guard already keys "my own claims" on the
+	// same session id, so a root minted this way is one the guard recognizes.
+	//
+	// Claude Code is the only host known to do this. The variables are
+	// undocumented, so this is a best-effort convenience: absent them, nothing
+	// self-registers and the explicit handshake is the fallback.
+	SessionEnv string
+	ProjectEnv string
+
 	// SessionLabel says where the agent's session_label comes from, in words the
 	// agent can act on. It is host-specific because the hosts call it different
 	// things, and getting it wrong is not a small error: the claim guard uses it
@@ -116,6 +129,8 @@ var registry = []Host{
 		Mail:         MailEnforced,
 		Subagents:    SubagentsGated,
 		SessionLabel: "your host session id",
+		SessionEnv:   "CLAUDE_CODE_SESSION_ID",
+		ProjectEnv:   "CLAUDE_PROJECT_DIR",
 	},
 	{
 		Kind:         "codex",
@@ -187,6 +202,29 @@ func Get(kind string) (Host, bool) {
 		}
 	}
 	return Host{}, false
+}
+
+// SelfRegisters reports whether this host hands its session to the environment,
+// so the MCP server can register the root without the agent's handshake.
+func (h Host) SelfRegisters() bool { return h.SessionEnv != "" && h.ProjectEnv != "" }
+
+// SelfRegistration finds the self-registering host whose session is present in
+// the environment, and returns it with the session id and project root it
+// exported. ok is false when no such variable is set — a non-Claude host, or a
+// Claude version that has stopped exporting it.
+//
+// getenv is taken as an argument rather than called directly so this package
+// keeps importing nothing: the caller passes os.Getenv, and tests pass a map.
+func SelfRegistration(getenv func(string) string) (host Host, sessionID, projectDir string, ok bool) {
+	for _, h := range registry {
+		if !h.SelfRegisters() {
+			continue
+		}
+		if id := getenv(h.SessionEnv); id != "" {
+			return h, id, getenv(h.ProjectEnv), true
+		}
+	}
+	return Host{}, "", "", false
 }
 
 // Kinds is the closed set of agent_kind values, and the source store.AgentKinds
