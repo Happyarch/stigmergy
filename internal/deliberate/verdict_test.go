@@ -44,10 +44,10 @@ func TestParseVerdict(t *testing.T) {
 			why:      "a wasted round, not a wrong one — it said the spec is not done",
 		},
 		{
-			name:     "no sentinel at all",
-			out:      "Looks fine to me!",
-			wantErr:  ErrNoVerdict,
-			why:      "caller re-prompts once, then FAILs — never passes",
+			name:    "no sentinel at all",
+			out:     "Looks fine to me!",
+			wantErr: ErrNoVerdict,
+			why:     "caller re-prompts once, then FAILs — never passes",
 		},
 		{
 			name:     "restates the format then answers",
