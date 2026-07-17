@@ -46,7 +46,7 @@ can run it, and an untested confinement is worse than an admitted gap.
 ## 1. The problem
 
 Ask one model to write a spec, then ask it to review its own spec, and it will
-approve it. Ask it to try harder and it will find spelling errors. This is not a
+approve it. This is not a
 prompting failure that a sterner instruction fixes: the model is being asked
 whether the most plausible continuation of its own reasoning is plausible, and of
 course it is. The reviewer and the author share every prior, so they share every
