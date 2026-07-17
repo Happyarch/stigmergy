@@ -4,9 +4,12 @@
 package mcpserver
 
 import (
+	"os"
 	"sync"
 
 	"github.com/happyarch/stigmergy/internal/gitx"
+	"github.com/happyarch/stigmergy/internal/hosts"
+	"github.com/happyarch/stigmergy/internal/ids"
 	"github.com/happyarch/stigmergy/internal/serr"
 	"github.com/happyarch/stigmergy/internal/store"
 )
@@ -38,6 +41,75 @@ type Session struct {
 // NewSession builds an unopened session bound to a global DB path.
 func NewSession(globalPath string) *Session {
 	return &Session{globalPath: globalPath}
+}
+
+// bootstrapFromEnv opens the project and registers the root from the session a
+// host left in the environment, so the agent can claim and remember without the
+// context_open/root_register handshake it routinely skips.
+//
+// It is the whole reason a Claude Code agent in a busy repo no longer has to be
+// nagged into registering: the host exports its session id, this server reads it,
+// and the claim guard — which keys "my own claims" on that same id — recognizes
+// the root without the agent lifting a finger. The session label is the host's
+// real id, not a synthetic one, precisely so the two agree.
+//
+// Best-effort and silent: any missing piece (no such host, not a git repo,
+// stigmergy not adopted here, a database that will not open) leaves the session
+// Unopened, and the explicit handshake still works. A failure here must never
+// stop the server from serving.
+func (s *Session) bootstrapFromEnv() {
+	host, sessionID, projectDir, ok := hosts.SelfRegistration(os.Getenv)
+	if !ok || projectDir == "" {
+		return
+	}
+	repo, err := gitx.Resolve(projectDir)
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(store.ProjectDBPath(repo.CommonDir)); err != nil {
+		return // stigmergy is not enabled here; do not create a database.
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state >= Opened {
+		return // The agent already opened it explicitly; do not fight that.
+	}
+
+	project, err := store.OpenProject(repo.CommonDir)
+	if err != nil {
+		return
+	}
+	global, err := store.OpenGlobal(s.globalPath)
+	if err != nil {
+		project.Close()
+		return
+	}
+	// Model is left empty: the environment carries the harness, never the model,
+	// and the agent can fill it later with root_register if it wants a roster
+	// line. Everything else resumes on (agent_kind, worktree, session_label), so a
+	// server restarted on /clear reconnects to the same root and its claims.
+	root, _, err := project.RegisterRoot(store.Registration{
+		RootID:       ids.NewRootID(),
+		AgentKind:    host.Kind,
+		Worktree:     repo.WorktreeRoot,
+		SessionLabel: sessionID,
+	})
+	if err != nil {
+		project.Close()
+		global.Close()
+		return
+	}
+
+	if s.project != nil {
+		s.project.Close()
+	}
+	if s.global != nil {
+		s.global.Close()
+	}
+	s.repo, s.project, s.global = repo, project, global
+	s.root, s.state = root, Registered
+	_, _ = project.ReapStaleRoots()
 }
 
 // Close releases both databases.

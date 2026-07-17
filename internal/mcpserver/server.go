@@ -155,5 +155,8 @@ func Run(ctx context.Context, version, globalPath string) error {
 	srv, session := New(version, globalPath)
 	defer session.Close()
 	defer session.EndRoot()
+	// If the host handed us its session in the environment, register before we
+	// serve, so the agent's first claim_acquire works without a prior handshake.
+	session.bootstrapFromEnv()
 	return srv.Run(ctx, &mcp.StdioTransport{})
 }

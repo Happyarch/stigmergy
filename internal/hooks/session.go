@@ -60,33 +60,49 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 
 	var sb strings.Builder
 	sb.WriteString("This project uses stigmergy for shared memory and coordination between agents.\n\n")
-	// model is left as a placeholder rather than filled in: this text is written
-	// by a hook, which knows the harness and cannot know the model. The agent is
-	// the only one who can answer, so the call is handed to it with the one gap
-	// only it can close.
-	fmt.Fprintf(&sb, "Register now, before your first edit:\n"+
-		"  1. context_open(project_root=%q)\n"+
-		"  2. root_register(agent_kind=%q, worktree=%q, session_label=%q, model=\"<your model id>\")\n\n",
-		repo.WorktreeRoot, agentKind, repo.WorktreeRoot, sessionID)
-	sb.WriteString("Fill in model with your own model id — what you actually are, not the harness. " +
-		"It is never checked and nothing depends on it; it is so a person reading the roster can tell " +
-		"two agents in the same host apart.\n\n")
-	sb.WriteString("Use session_label exactly as given: it is how stigmergy knows which claims are yours. " +
-		"Until you register, every claim in the repository — including any you made earlier — will block your edits.\n\n")
-	sb.WriteString("Then: memory_search before starting work, and claim_acquire before editing files others might touch.\n")
+
+	host, hostKnown := hosts.Get(agentKind)
+	if hostKnown && host.SelfRegisters() && os.Getenv(host.SessionEnv) != "" {
+		// The MCP server registered this session from the environment before it
+		// began serving. Telling the agent to "register now" would send it chasing
+		// a handshake that has already happened, so this states the fact instead —
+		// and the agent that has nothing to do about registration is far more
+		// likely to get on with the part that matters: searching memory and
+		// claiming before it edits.
+		sb.WriteString("You are already registered as a root for this session. stigmergy did it for you " +
+			"from the session your host started — there is no context_open or root_register to run.\n\n")
+		sb.WriteString("So: memory_search before you start, and claim_acquire before editing a file others " +
+			"might touch. (Optional: root_register with model=\"<your model id>\" if you want the roster to " +
+			"show which model you are — nothing depends on it.)\n")
+	} else {
+		// model is left as a placeholder rather than filled in: this text is written
+		// by a hook, which knows the harness and cannot know the model. The agent is
+		// the only one who can answer, so the call is handed to it with the one gap
+		// only it can close.
+		fmt.Fprintf(&sb, "Register now, before your first edit:\n"+
+			"  1. context_open(project_root=%q)\n"+
+			"  2. root_register(agent_kind=%q, worktree=%q, session_label=%q, model=\"<your model id>\")\n\n",
+			repo.WorktreeRoot, agentKind, repo.WorktreeRoot, sessionID)
+		sb.WriteString("Fill in model with your own model id — what you actually are, not the harness. " +
+			"It is never checked and nothing depends on it; it is so a person reading the roster can tell " +
+			"two agents in the same host apart.\n\n")
+		sb.WriteString("Use session_label exactly as given: it is how stigmergy knows which claims are yours. " +
+			"Until you register, every claim in the repository — including any you made earlier — will block your edits.\n\n")
+		sb.WriteString("Then: memory_search before starting work, and claim_acquire before editing files others might touch.\n")
+	}
 
 	// What follows is true of this host and not necessarily of the next one.
 	// This paragraph used to end "Edits to files claimed by another agent are
 	// blocked" for everyone, which is Claude Code's guarantee — on Codex the edit
 	// lands and the turn is halted afterwards, so the agent most in need of
 	// checking claims itself was the one being told it did not have to.
-	if h, ok := hosts.Get(agentKind); ok {
+	if hostKnown {
 		sb.WriteString("\n")
-		sb.WriteString(h.ClaimRule())
+		sb.WriteString(host.ClaimRule())
 		sb.WriteString("\n")
-		sb.WriteString(h.MailRule())
+		sb.WriteString(host.MailRule())
 		sb.WriteString("\n")
-		sb.WriteString(h.SubagentRule())
+		sb.WriteString(host.SubagentRule())
 		sb.WriteString("\n")
 	}
 

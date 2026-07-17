@@ -128,6 +128,11 @@ func TestHeartbeatFromAHookKeepsClaimsAlive(t *testing.T) {
 // Schema changes belong to init, doctor and the server, which can take their time
 // and say what they did.
 func TestHooksNeverMigrateTheSchema(t *testing.T) {
+	// Pin the session-start branch: with no host session in the environment it
+	// tells the agent to register, which is the path this test asserts on. Left
+	// unset, the result would depend on whether the test host happens to export
+	// CLAUDE_CODE_SESSION_ID.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	f := newFixture(t)
 	f.register(t, "claude-code", "sess-worker")
 
