@@ -49,8 +49,11 @@ func TestInstallClaudeInAnEmptyProject(t *testing.T) {
 			t.Errorf("settings.json does not install %q:\n%s", want, settings)
 		}
 	}
-	if !strings.Contains(read(t, memoryPath), "stigmergy") {
-		t.Error("CLAUDE.md did not get the stigmergy block")
+	// The instructions travel with the MCP server and the session-start hook
+	// now. A CLAUDE.md conjured up by `init` would be a third copy that nothing
+	// keeps current, so init must not create one.
+	if _, err := os.Stat(memoryPath); !os.IsNotExist(err) {
+		t.Errorf("install created CLAUDE.md; it should no longer write instruction files (err=%v)", err)
 	}
 }
 
@@ -191,8 +194,8 @@ func TestInstallClaudeIsIdempotent(t *testing.T) {
 	if n := strings.Count(read(t, settingsPath), "hook claim-guard"); n != 1 {
 		t.Fatalf("claim-guard is installed %d times, want 1", n)
 	}
-	if n := strings.Count(read(t, memoryPath), BeginMarker); n != 1 {
-		t.Fatalf("CLAUDE.md has %d stigmergy blocks, want 1", n)
+	if _, err := os.Stat(memoryPath); !os.IsNotExist(err) {
+		t.Errorf("a second install created CLAUDE.md (err=%v)", err)
 	}
 }
 
@@ -250,8 +253,8 @@ network_access = true   # needed for the proxy
 			t.Errorf("hooks.json does not install %q", want)
 		}
 	}
-	if !strings.Contains(read(t, memoryPath), "stigmergy") {
-		t.Error("AGENTS.md did not get the stigmergy block")
+	if _, err := os.Stat(memoryPath); !os.IsNotExist(err) {
+		t.Errorf("install created AGENTS.md; it should no longer write instruction files (err=%v)", err)
 	}
 
 	// Reinstalling replaces the block rather than stacking another one.

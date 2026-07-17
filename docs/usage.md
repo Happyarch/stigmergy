@@ -44,10 +44,16 @@ cd your-repo
 stigmergy init
 ```
 
-That creates the project database, registers the MCP server with both hosts,
-installs the hooks, and adds a marked block to `CLAUDE.md` / `AGENTS.md` telling
-agents to use it. Existing configuration is merged, never overwritten. Use
-`--host claude` or `--host codex` for just one.
+That creates the project database, registers the MCP server with every supported
+host, and installs the hooks. Existing configuration is merged, never overwritten.
+Use `--host claude`, `--host codex`, `--host antigravity` or `--host opencode` for
+just one.
+
+It does not touch `CLAUDE.md` or `AGENTS.md`. It used to write a block into them,
+and that block is now delivered instead by the MCP server (which every host shows
+its model) and the session hooks (which are the only thing that knows an agent's
+session id). If you have a leftover block from an older version, `stigmergy doctor`
+says so; `stigmergy init --remove` takes it out.
 
 Exactly what gets written, per host: [hosts.md](hosts.md).
 
@@ -172,7 +178,7 @@ Enable stigmergy in this repository.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--host` | `all` | which hosts to configure: `all`, `claude`, or `codex` |
+| `--host` | `all` | which hosts to configure: `all`, `claude`, `codex`, `antigravity`, or `opencode` |
 | `--remove` | | remove stigmergy's configuration from this repository |
 | `--no-input` | | never prompt; print what to run instead |
 | `--purge-db` | | with `--remove`: **also delete the project database and every memory in it** |

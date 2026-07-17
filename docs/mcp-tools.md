@@ -121,7 +121,7 @@ not exist.
 
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
-| `agent_kind` | string | yes | which host you are: claude-code, codex, or antigravity |
+| `agent_kind` | string | yes | which host you are: claude-code, codex, antigravity, or opencode |
 | `worktree` | string | yes | absolute path of the worktree you are in |
 | `branch` | string | no | if known |
 | `session_label` | string | no | **supply it** — see below |
@@ -448,9 +448,11 @@ The mailbox exists so that "you are blocked" has an answer other than "wait" or
 
 **Mail is delivered, not left lying about.** This is not an MCP concern — no tool
 pushes anything — but it governs how the tools below behave, so it belongs here. The
-host hooks put unread mail in front of the agent: on Claude Code by refusing to let a
-turn end while a message has never been shown, on Codex at the start of a turn and
-after each edit. See [hosts.md](hosts.md).
+host hooks put unread mail in front of the agent: on Claude Code and Antigravity by
+refusing to let a turn end while a message has never been shown, on Codex and opencode
+at the start of a turn and after each edit — neither of those two has a hook that can
+hold a turn open, so there the agent can still walk away, and it is told so. See
+[hosts.md](hosts.md).
 
 Two timestamps, deliberately distinct:
 
@@ -605,6 +607,7 @@ stigmergy is the shared memory and coordination layer for every agent in this re
 
 The extended block that follows covers memories (CAS, scopes, what makes a memory
 worth keeping), claims (narrowest scope, renew, release, negotiate on conflict, and
-the Claude/Codex enforcement difference), the mailbox, and the root/subagent rule.
+what each host can and cannot enforce), the mailbox, and the root/subagent rule.
 It is in `internal/mcpserver/instructions.go` and is the single place to change what
-every agent is told.
+every agent is told. The sentences naming hosts are rendered from
+`internal/hosts`, so a new host cannot leave a stale one behind.

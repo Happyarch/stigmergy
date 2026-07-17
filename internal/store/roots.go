@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/happyarch/stigmergy/internal/hosts"
 	"github.com/happyarch/stigmergy/internal/serr"
 )
 
@@ -37,8 +40,16 @@ const StaleRootSilence = 5 * time.Minute
 // opportunistic cleanup.
 const StaleRootAge = 7 * 24 * time.Hour
 
-// AgentKinds is the closed set enforced by the schema.
-var AgentKinds = []string{"claude-code", "codex", "antigravity"}
+// AgentKinds is the closed set of hosts, declared once in the hosts package.
+//
+// It used to be a second hand-written list, kept in step with the hosts it
+// duplicated only by whoever remembered both. A CHECK constraint on
+// roots.agent_kind still enforces the same set from the schema side; migration
+// 0006 removes it, because it costs a table rebuild per host — that is how 0003
+// silently dropped both roots indexes and 0004 had to put them back — and buys
+// nothing an agent ever hits, since every write goes through
+// Registration.validate first.
+var AgentKinds = hosts.Kinds()
 
 // ErrNoRoot reports an unknown or already-ended root.
 var ErrNoRoot = errors.New("store: root not found")
@@ -130,7 +141,15 @@ type Registration struct {
 
 func (r Registration) validate() error {
 	if !contains(AgentKinds, r.AgentKind) {
-		return serr.E(serr.InvalidInput, "agent_kind %q is invalid: must be \"claude-code\", \"codex\", or \"antigravity\"", r.AgentKind)
+		// Built from AgentKinds rather than written out: this sentence named the
+		// three hosts it knew about for as long as there were three, and would
+		// have gone on naming them afterwards.
+		quoted := make([]string, 0, len(AgentKinds))
+		for _, k := range AgentKinds {
+			quoted = append(quoted, strconv.Quote(k))
+		}
+		return serr.E(serr.InvalidInput, "agent_kind %q is invalid: must be one of %s",
+			r.AgentKind, strings.Join(quoted, ", "))
 	}
 	if !filepath.IsAbs(r.Worktree) {
 		return serr.E(serr.InvalidInput, "worktree must be an absolute path, got %q", r.Worktree)

@@ -33,17 +33,27 @@ type Request struct {
 //
 //   - --sandbox read-only: it cannot write the tree, so it cannot make an edit
 //     that dodges the claim guard.
-//   - --ask-for-approval never: in a non-interactive run, Codex fails closed on
-//     any escalation rather than silently prompting into the void.
+//   - -c approval_policy="never": in a non-interactive run, Codex fails closed on
+//     any escalation rather than silently prompting into the void. This is set as
+//     a config override and not as --ask-for-approval, which does not exist on
+//     `codex exec`: the flag is top-level only (the interactive TUI, where there
+//     is a human to ask), and passing it to exec is a hard argument error that
+//     kills the explorer before it starts. The value is validated — codex accepts
+//     only untrusted|on-failure|on-request|granular|never — so a typo here fails
+//     loudly rather than silently leaving the policy at its default.
 //   - --ephemeral: no session state is carried between explorations.
 //   - mcp_servers.stigmergy.enabled=false: the explorer cannot see stigmergy's
 //     tools at all, so it cannot register a root, take a claim, or write a
 //     memory. Findings go back to the root, which decides what to record.
+//
+// Note that an unknown -c key is accepted silently (only --strict-config rejects
+// one), so a future confinement flag added here is worth testing against a live
+// codex rather than trusting that it took.
 func Args(req Request) []string {
 	args := []string{
 		"exec",
 		"--sandbox", "read-only",
-		"--ask-for-approval", "never",
+		"-c", `approval_policy="never"`,
 		"--ephemeral",
 		"-c", "mcp_servers.stigmergy.enabled=false",
 	}

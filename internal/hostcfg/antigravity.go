@@ -30,12 +30,11 @@ func AntigravityPluginDir(worktree string) string {
 }
 
 // AntigravityPaths returns the four file paths that InstallAntigravity writes.
-func AntigravityPaths(worktree string) (pluginJSON, mcpConfig, hooksJSON, rulesFile string) {
+func AntigravityPaths(worktree string) (pluginJSON, mcpConfig, hooksJSON string) {
 	base := AntigravityPluginDir(worktree)
 	return filepath.Join(base, "plugin.json"),
 		filepath.Join(base, "mcp_config.json"),
-		filepath.Join(base, "hooks.json"),
-		filepath.Join(base, "rules", "stigmergy.md")
+		filepath.Join(base, "hooks.json")
 }
 
 // InstallAntigravity creates the stigmergy plugin for Antigravity inside the
@@ -46,12 +45,11 @@ func AntigravityPaths(worktree string) (pluginJSON, mcpConfig, hooksJSON, rulesF
 // host which shares .mcp.json). Removal is a single RemoveAll.
 func InstallAntigravity(worktree string) error {
 	base := AntigravityPluginDir(worktree)
-	rulesDir := filepath.Join(base, "rules")
-	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+	if err := os.MkdirAll(base, 0o755); err != nil {
 		return err
 	}
 
-	pluginJSON, mcpConfig, hooksJSON, rulesFile := AntigravityPaths(worktree)
+	pluginJSON, mcpConfig, hooksJSON := AntigravityPaths(worktree)
 
 	// plugin.json — the marker file that identifies the directory as a plugin.
 	if err := writeFileAtomic(pluginJSON, []byte("{\"name\":\"stigmergy\"}\n"), 0o644); err != nil {
@@ -75,13 +73,15 @@ func InstallAntigravity(worktree string) error {
 	}
 
 	// hooks.json — all hook definitions for the plugin.
-	if err := writeFileAtomic(hooksJSON, []byte(antigravityHooksJSON()), 0o644); err != nil {
-		return err
-	}
-
-	// rules/stigmergy.md — loaded by Antigravity as a rule for all sessions
-	// in this workspace.
-	return WriteMarkerBlock(rulesFile, AntigravityBlurb())
+	//
+	// There is no rules/stigmergy.md any more. It was always the weakest of the
+	// three instruction files — Antigravity activates a rule in one of four modes
+	// and the docs never said which applies to a rule that declares none, so it
+	// may have reached nobody — and nothing load-bearing was allowed to rest on
+	// it for exactly that reason. Now that the shared rules ride the MCP server's
+	// instructions and the pre-invocation hook carries the rest, it has no job
+	// left. See InstallClaude.
+	return writeFileAtomic(hooksJSON, []byte(antigravityHooksJSON()), 0o644)
 }
 
 // RemoveAntigravity removes the stigmergy plugin directory entirely.

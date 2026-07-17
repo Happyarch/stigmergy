@@ -13,7 +13,7 @@ func TestInstallAntigravityInAnEmptyProject(t *testing.T) {
 	if err := InstallAntigravity(wt); err != nil {
 		t.Fatalf("InstallAntigravity: %v", err)
 	}
-	pluginJSON, mcpConfig, hooksJSON, rulesFile := AntigravityPaths(wt)
+	pluginJSON, mcpConfig, hooksJSON := AntigravityPaths(wt)
 
 	// The plugin marker is what makes Antigravity load the directory at all.
 	var manifest map[string]any
@@ -46,9 +46,6 @@ func TestInstallAntigravityInAnEmptyProject(t *testing.T) {
 			t.Errorf("hooks.json does not install %q:\n%s", want, hooks)
 		}
 	}
-	if !strings.Contains(read(t, rulesFile), "stigmergy") {
-		t.Error("rules/stigmergy.md did not get the stigmergy block")
-	}
 }
 
 // PreToolUse nests its handlers under a matcher; PreInvocation and Stop take
@@ -59,7 +56,7 @@ func TestAntigravityHooksMatchTheDocumentedSchema(t *testing.T) {
 	if err := InstallAntigravity(wt); err != nil {
 		t.Fatal(err)
 	}
-	_, _, hooksJSON, _ := AntigravityPaths(wt)
+	_, _, hooksJSON := AntigravityPaths(wt)
 
 	var cfg map[string]map[string]any
 	if err := json.Unmarshal([]byte(read(t, hooksJSON)), &cfg); err != nil {
@@ -139,29 +136,13 @@ func TestInstallAntigravityIsIdempotent(t *testing.T) {
 	if err := InstallAntigravity(wt); err != nil {
 		t.Fatal(err)
 	}
-	_, _, hooksJSON, rulesFile := AntigravityPaths(wt)
-	firstHooks, firstRules := read(t, hooksJSON), read(t, rulesFile)
+	_, _, hooksJSON := AntigravityPaths(wt)
+	firstHooks := read(t, hooksJSON)
 
 	if err := InstallAntigravity(wt); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(t, hooksJSON); got != firstHooks {
 		t.Error("a second init changed hooks.json")
-	}
-	if got := read(t, rulesFile); got != firstRules {
-		t.Errorf("a second init changed rules/stigmergy.md:\n%s", got)
-	}
-}
-
-// The blurb must tell an Antigravity subagent not to register. It is the only
-// thing that will: no hook payload distinguishes a subagent, so the root gate
-// never fires on this host.
-func TestTheAntigravityBlurbAsksSubagentsNotToRegister(t *testing.T) {
-	blurb := AntigravityBlurb()
-	if !strings.Contains(blurb, "do not register") {
-		t.Errorf("the blurb does not tell subagents to stay out of the root's business:\n%s", blurb)
-	}
-	if strings.Contains(blurb, "Subagents read and report back.") {
-		t.Error("the blurb still implies subagents are gated, which they are not on this host")
 	}
 }

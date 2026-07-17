@@ -7,9 +7,10 @@
 *.sqlite3-shm
 
 # Working notes, kept in the tree but not published. codex-manual.md is a
-# vendored copy of OpenAI's Codex docs — reference material, not ours to
-# republish.
+# vendored copy of OpenAI's Codex docs, and opencode_docs/ a saved copy of
+# opencode's — reference material, not ours to republish.
 /codex-manual.md
+/opencode_docs/
 /docs/plan.md
 /docs/TODO.md
 /docs/VERIFY.md

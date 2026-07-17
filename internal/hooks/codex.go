@@ -47,11 +47,18 @@ var pathKeys = map[string]bool{
 //	*** Add File: src/main.go
 //	*** Update File: src/api/handlers.go
 //	*** Delete File: old.go
+//	*** Move to: src/renamed.go
 //
 // One apply_patch call can touch many files, which is why path extraction
 // returns a list rather than a single path: a claim on any one of them is a
 // conflict, and reading only the first would let the rest through unnoticed.
-var patchFileHeader = regexp.MustCompile(`(?m)^\*\*\*\s+(?:Add|Update|Delete|Move)\s+File:\s*(.+?)\s*$`)
+//
+// "Move to:" is the odd one out — it does not say "File:" — and it was missed
+// until opencode's copy of the apply_patch format made us read the grammar
+// again. A rename writes its destination as surely as a create does, so a claim
+// on the destination is a conflict; without this the halt never fired for it.
+// Both hosts share the format and both were affected.
+var patchFileHeader = regexp.MustCompile(`(?m)^\*\*\*\s+(?:(?:Add|Update|Delete)\s+File|Move\s+to):\s*(.+?)\s*$`)
 
 // ExtractPaths finds every file path a Codex tool call is about to write.
 //
@@ -61,6 +68,17 @@ var patchFileHeader = regexp.MustCompile(`(?m)^\*\*\*\s+(?:Add|Update|Delete|Mov
 // lookup, while a missed path means an unnoticed conflict — which on Codex
 // means the edit lands, and the halt never fires.
 func ExtractPaths(in *CodexInput) []string {
+	return pathsIn(in.ToolInput)
+}
+
+// pathsIn walks an arbitrary decoded tool payload and returns every file path it
+// can find, by key name or by reading apply_patch headers out of any string.
+//
+// It is shared with opencode, whose tool arguments are a different shape but the
+// same problem: filePath lowercases to a key we already know, and its
+// apply_patch is the same format. One walker means one place for a path to be
+// missed, rather than one per host.
+func pathsIn(payload any) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(p string) {
@@ -96,7 +114,7 @@ func ExtractPaths(in *CodexInput) []string {
 			}
 		}
 	}
-	walk(in.ToolInput)
+	walk(payload)
 	return out
 }
 

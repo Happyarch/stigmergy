@@ -46,16 +46,20 @@ use_memories = false
 var foreignServer = regexp.MustCompile(`(?m)^\s*\[mcp_servers\.stigmergy\]`)
 
 // InstallCodex registers the MCP server and hooks for Codex.
+//
+// It no longer writes a block into AGENTS.md; see InstallClaude for why. Codex
+// had the sharpest version of the problem: its block and Claude's said opposite
+// things about whether a claimed file is protected, and AGENTS.md is commonly
+// symlinked to CLAUDE.md — so `stigmergy init` wrote one, then overwrote it with
+// the other, and which host got the truth came down to the order of two if
+// statements.
 func InstallCodex(worktree string) error {
-	configPath, hooksPath, memoryPath := CodexPaths(worktree)
+	configPath, hooksPath, _ := CodexPaths(worktree)
 
 	if err := writeTOMLBlock(configPath, codexBlock); err != nil {
 		return err
 	}
-	if err := installCodexHooks(hooksPath); err != nil {
-		return err
-	}
-	return WriteMarkerBlock(memoryPath, CodexBlurb())
+	return installCodexHooks(hooksPath)
 }
 
 // RemoveCodex takes stigmergy back out of the Codex configuration.

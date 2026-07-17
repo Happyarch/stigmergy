@@ -1,11 +1,29 @@
 # Host integration
 
 What `stigmergy init` writes into a project, what the hooks send and receive, and
-where the hosts differ. Source: `internal/hostcfg/` and `internal/hooks/`.
+where the hosts differ. Source: `internal/hosts/`, `internal/hostcfg/` and
+`internal/hooks/`.
 
 Read [§7 of architecture.md](architecture.md#7-the-asymmetry-is-inherent) first if
-you only read one thing: Claude Code can prevent a bad edit, and Codex cannot.
-Everything below follows from that.
+you only read one thing: some hosts can prevent a bad edit and some cannot, and
+stigmergy never pretends otherwise. Everything below follows from that.
+
+What a host can enforce is declared once, in `internal/hosts`, along the axes that
+actually vary — whether a claimed edit can be refused, whether mail can be made
+unignorable, whether a subagent can be told from a root, and where the session id
+comes from. The text every agent reads is rendered from those axes rather than
+written per host. That is not tidiness: the per-host copies used to contradict each
+other, and an agent told the wrong one stops checking claims.
+
+| | Claims | Mail | Subagents |
+|---|---|---|---|
+| Claude Code | blocked before the edit | enforced at end of turn | gated |
+| Antigravity | blocked before the edit | enforced at end of turn | not visible — advisory |
+| opencode | blocked before the edit | advisory | gated, via the session's parent |
+| Codex | warned, halted after the edit | advisory | not visible — advisory |
+
+No two rows are the same, and no column implies another: opencode blocks edits as
+firmly as Claude Code and still cannot be made to read its mail.
 
 ---
 
@@ -97,13 +115,22 @@ removal leaves it alone.
 
 `doctor` FAILs when an adopted project still has auto memory enabled.
 
-### `CLAUDE.md`
+### `CLAUDE.md` — no longer written
 
-A marker block telling the agent that memory lives in stigmergy and not in its own
-memory files, to register at session start, to claim before editing, to negotiate
-rather than edit around a claim, and that only the root may write. This is the
-belt to the settings key's braces: the setting stops the mechanism, the block tells
-the agent why.
+`init` used to put a marker block here. It does not any more, and it will not remove
+one you already have; `stigmergy doctor` reports a leftover, and `init --remove` takes
+it out.
+
+The block said what the MCP server's instructions now say to every host at once, and
+what the session-start hook says with the one thing a file cannot know — the agent's
+session id. Three copies of the same advice drifted apart, and the Claude and Codex
+copies ended up contradicting each other about whether a claimed file is protected.
+That is not hypothetical harm: `AGENTS.md` is commonly symlinked to `CLAUDE.md`, so
+`init` wrote one and then overwrote it with the other, and which host got the truth
+depended on the order of two `if` statements.
+
+`autoMemoryEnabled: false` still carries the other half of the old block's job: the
+setting stops the mechanism, the instructions explain why.
 
 ### The hooks
 
@@ -224,8 +251,7 @@ and it must re-acquire — which is the moment it discovers the path is spoken f
 .agents/plugins/stigmergy/
 ├── plugin.json
 ├── mcp_config.json
-├── hooks.json
-└── rules/stigmergy.md
+└── hooks.json
 ```
 
 This is the one place stigmergy gets an easier job than it does on Claude Code.
@@ -284,12 +310,11 @@ memory — a swarm of agents blocking each other's edits, which is the failure t
 exists to prevent.
 
 Nothing can enforce the boundary from the outside, so the boundary is a request — and it is
-aimed where Codex aims it: at the root, before the subagent exists. `rules/stigmergy.md`
-says to use `stigmergy explore` rather than `invoke_subagent`, the same instruction
-`AGENTS.md` carries for the same reason, one step worse. A second line, addressed to the
-subagent itself, tells it not to register if another agent invoked it; that one arrives
-through `PreInvocation` rather than the rules file, so it lands even if rule activation
-does not.
+aimed where Codex aims it: at the root, before the subagent exists. The session text says
+to use `stigmergy explore` rather than `invoke_subagent`, for the same reason Codex is
+told to, one step worse. A second line, addressed to the subagent itself, tells it not to
+register if another agent invoked it. Both arrive through `PreInvocation`, which is what
+makes them dependable — an instruction file here might never have been read at all.
 
 Prevention at the root, backstop at the child. An agent knows whether a person invoked it;
 stigmergy does not.
@@ -300,15 +325,135 @@ read what the payload actually carries. If it names a parent, `antiSubagentKeys`
 no other change. Until then, prefer `stigmergy explore` for read-only work here, for the
 same reason Codex does.
 
-### `rules/stigmergy.md` may not be loaded
+### `rules/stigmergy.md` — no longer written
 
-Antigravity activates a rule in one of four modes — Manual, Always On, Model Decision, or
-Glob. The docs do not say which applies to a rule that declares none, nor what syntax
-declares one. If the default is Manual, this file reaches nobody until it is `@`-mentioned.
+There used to be a rule file here, and it was always the weakest of the three
+instruction files. Antigravity activates a rule in one of four modes — Manual, Always
+On, Model Decision, or Glob — and the docs never said which applies to a rule that
+declares none, nor what syntax declares one. If the default is Manual, it reached
+nobody until `@`-mentioned, which is why nothing load-bearing was ever allowed to rest
+on it.
 
-Nothing load-bearing rests on it: the `PreInvocation` hook injects the registration
-instructions itself, so an agent registers whether or not the rule was read. Verify the
-activation default before relying on the file for anything the hook does not also say.
+Now nothing rests on it at all: the shared rules ride the MCP server's instructions and
+`PreInvocation` carries the registration text, as it always did. A file whose delivery
+we could never confirm is one less thing to keep true.
+
+---
+
+## opencode
+
+Verified against **opencode v1.17.20**. Pin that version in your head while reading:
+everything below was read out of the binary and then checked against a live session,
+because opencode's published documentation is wrong in two places that matter.
+
+`init --host opencode` touches two paths:
+
+- `opencode.json` — the `mcp` entry, merged into your config.
+- `.opencode/plugin/stigmergy.js` — the hook plugin, which stigmergy owns outright.
+
+### Why there is a plugin at all
+
+opencode has no hook system in the sense the other three hosts mean it. There is no
+config file naming a command to run; there is a plugin API, in TypeScript or
+JavaScript, loaded into opencode's own runtime. So stigmergy ships a plugin, and the
+plugin shells out to `stigmergy hook opencode-*`.
+
+The plugin is deliberately thin and deliberately dependency-free. It decides nothing —
+every decision is made by the same Go code the other hosts use — and it imports nothing
+but `node:child_process`, because a plugin needing `npm install` would make installing
+stigmergy a toolchain problem. It is regenerated by `init`; do not edit it.
+
+The one thing it decides is the one thing only it can: whether a session has a parent.
+
+### The hooks
+
+| opencode hook | stigmergy | what it does |
+|---|---|---|
+| `tool.execute.before` (`edit`, `write`, `apply_patch`) | `opencode-claim-guard` | **denies** — throws, and the tool never runs |
+| `tool.execute.before` (`stigmergy_*`) | `opencode-root-gate` | **denies** — keeps subagents out of the root-only tools |
+| `chat.message` | `opencode-context` | registration details and mail, once per real user prompt |
+
+There is no end-of-turn hook, so there is no mail gate. See below.
+
+### Blocking works here, and the reason reaches the agent
+
+`Plugin.trigger` awaits each hook *before* the tool runs, with no `try`/`catch`, and it
+dispatches through Effect's `promise` — so a throw is an unrecoverable defect rather
+than a caught error. The tool does not run. This is deliberate on opencode's part: the
+`config` and `dispose` hooks in the same function *are* wrapped and swallowed.
+
+A live session confirmed the part that control flow cannot prove: the thrown message
+reaches the model **verbatim**. So opencode is the only host besides Claude Code where
+an agent is both stopped and told who holds the claim and how to reach them.
+
+### The subagent gate works here — unlike anywhere else
+
+opencode's `task` tool gives its child a session of its own, and records the parent on
+it. A session with no parent has no `parentID` field at all; a child has one. The
+plugin resolves it with `client.session.get`, caches it per session, and reports it.
+
+This is the gate Codex cannot have (nothing identifies a subagent) and Antigravity
+cannot have (a subagent is a separate conversation with no recorded parent). It is
+worth noticing that opencode gives it to us almost by accident, through a REST field
+rather than a hook payload.
+
+"Could not ask" is reported as such, not guessed at. If the plugin cannot reach the
+opencode server, the session is treated as a root — the same asymmetry the Antigravity
+gate settled on, for the same reason: treating unknown as *subagent* would deny a real
+root its claims and its memory, which breaks stigmergy outright, while the other way
+costs one row in the roster.
+
+### Mail is delivered but cannot be enforced
+
+`session.idle` is a real event and it fires at the end of a turn, but it is dispatched
+with its return value discarded, and its payload is only `{sessionID}`. There is
+nothing to return and nothing to block.
+`experimental.compaction.autocontinue` is not a general continue mechanism either: it
+can only *suppress* the continue opencode already intended after a compaction.
+
+So mail rides `chat.message`, which fires once per real user prompt — the
+`UserPromptSubmit` analogue — and stigmergy tells opencode agents plainly that nothing
+makes them read it. Same honesty as Codex, for a different reason.
+
+### Two things the documentation gets wrong
+
+Both were found by reading the binary, and both would have produced a broken host:
+
+- **`tool.execute.before` carries `sessionID`.** The docs omit it. Without it there is
+  no `session_label`, and without that the claim guard cannot tell an agent's own
+  claims from everyone else's — every agent would be blocked by itself.
+- **`permission.ask` does not exist.** opencode's *own* embedded reference doc lists it
+  as a hook. There is no call site anywhere in the binary; permissions are decided
+  entirely by a static ruleset. Anything built on it would never have run.
+
+Also worth knowing, since none of it is documented:
+
+- The write tools are `edit`, `write` and `apply_patch`. There is no `patch` and no
+  `multiedit`. `apply_patch` names no file: its paths are headers inside `patchText`.
+- MCP tools are prefixed with the server name — `stigmergy_claim_acquire` — so Claude's
+  `mcp__stigmergy__(...)` matcher does not transfer.
+- A message part's `id` must start with `prt`. Get it wrong and opencode rejects the
+  whole message: the text never reaches the model, and the only trace is an "invalid
+  user part before save" line in a log nobody is reading.
+- `opencode --pure` disables external plugins. MCP still works, so the rules still
+  arrive; the hooks do not, so nothing is enforced.
+
+### `experimental.chat.system.transform` is a trap
+
+It looks like the right home for the registration text — it fires on every request and
+carries the `sessionID`. Do not use it.
+
+A live probe showed it firing **three times for a single user prompt**, all with the
+same `sessionID`, one of them for opencode's hidden **title generator**. Its input is
+`{sessionID, model}` and carries no `agent` field, so there is no way to tell the real
+agent from the internal `title`, `summary` and `compaction` agents. Anything pushed
+there lands in all of their prompts. The system prompt is also cache-sensitive —
+opencode collapses appended entries specifically for cache-friendliness — so volatile
+text there costs a cache miss every turn.
+
+stigmergy does not need it. The shared rules arrive through the MCP server's
+`initialize.instructions`, which opencode wraps in `<mcp_instructions>` and puts in the
+system prompt itself, with no plugin involved.
 
 ---
 
@@ -363,11 +508,17 @@ If a `[mcp_servers.stigmergy]` section already exists *outside* the managed bloc
 
 `apply_patch` is addressable as `Edit|Write`.
 
-### `AGENTS.md`
+### `AGENTS.md` — no longer written
 
-The same marker block as `CLAUDE.md`, plus two things Codex agents need and Claude
-agents don't: that claims **cannot be enforced before an edit here**, and that
-native subagents are not a boundary (use `stigmergy explore` instead).
+As with `CLAUDE.md`, and this is the file that made the case for stopping. The two
+things Codex agents most need to know — that claims **cannot be enforced before an
+edit here**, and that native subagents are not a boundary — are exactly the two the
+Claude block denied. One symlink and a Codex agent reads "blocked outright", stops
+checking claims, and writes over someone's work.
+
+Both sentences are now rendered per host from `internal/hosts` and delivered by the
+session hook, which knows which host it is talking to. A test fails if a host is ever
+promised enforcement it does not have.
 
 ---
 
@@ -427,15 +578,23 @@ promise it lands in the agent's context. Claude's `Stop` hook can block the turn
 put the mail *into the conversation*; Codex's cannot. So the asymmetry is the same one
 that runs through the rest of this file, and it is stated rather than papered over:
 
-| | Claude Code & Antigravity | Codex |
+| | Claude Code & Antigravity | Codex & opencode |
 |---|---|---|
 | When mail arrives | end of turn, and the turn cannot end until it does | start of turn, and after each edit |
 | Can the agent finish while ignoring it | no | yes |
 
-Both hosts mark the mail delivered when they show it, because both channels demonstrably
-reach the agent — Codex's `PostToolUse` `systemMessage` is the same channel the claim
-halt relies on. What Codex does not get is the guarantee: on Claude and Antigravity an agent *cannot*
-walk away from an undelivered message, and on Codex it can.
+Every host marks the mail delivered when it shows it, because every channel demonstrably
+reaches the agent — Codex's `PostToolUse` `systemMessage` is the same channel the claim
+halt relies on, and opencode's `chat.message` part is saved into the conversation. What
+Codex and opencode do not get is the guarantee: on Claude and Antigravity an agent
+*cannot* walk away from an undelivered message, and on the other two it can.
+
+Note that this line does not follow the claims line. opencode blocks a claimed edit as
+firmly as Claude Code does, and still cannot be made to read its mail: the two depend on
+different things. Blocking needs a hook that runs *before* a tool and can refuse it;
+mail enforcement needs one that runs at the *end of a turn* and can refuse to let it
+end. opencode has the first and not the second. That is why stigmergy describes hosts by
+what each hook can do rather than sorting them into good and bad ones.
 
 ### Codex hooks fail open — including when the database is broken
 
@@ -474,7 +633,7 @@ until it isn't.
 `stigmergy explore "PROMPT"` runs instead:
 
 ```
-codex exec --sandbox read-only --ask-for-approval never --ephemeral \
+codex exec --sandbox read-only -c approval_policy="never" --ephemeral \
   -c mcp_servers.stigmergy.enabled=false [--json] -- "PROMPT"
 ```
 
@@ -483,9 +642,33 @@ Every flag is load-bearing:
 | flag | why |
 |---|---|
 | `--sandbox read-only` | cannot write the tree, so cannot dodge the claim guard |
-| `--ask-for-approval never` | fails closed on escalation instead of prompting into a void |
+| `-c approval_policy="never"` | fails closed on escalation instead of prompting into a void |
 | `--ephemeral` | no session state carried between explorations |
 | `-c mcp_servers.stigmergy.enabled=false` | the explorer cannot even *see* stigmergy's tools — it cannot register a root, take a claim, or write a memory |
+
+The approval policy is set as a **config override and not as `--ask-for-approval
+never`**, which is the obvious way to write it and does not work: that flag is
+top-level only — the interactive TUI, where there is a human to ask — and `codex
+exec` rejects it as an unknown argument, killing the explorer before it starts.
+This is not a graceful degradation to guard against; it is a hard argument error,
+and `stigmergy explore` shipped with it for months because nothing tests a flag
+list and nothing runs codex in CI. `TestArgsNeverPassesAskForApproval` now pins it.
+
+Two related traps, both verified against codex 0.144.5:
+
+- **`-c` values are TOML**, so the quoting in `approval_policy="never"` is not
+  decoration — a bare `never` is not the string. codex validates this key's value
+  (`untrusted|on-failure|on-request|granular|never`), so a bad *value* fails loudly.
+- **A bad *key* does not.** `-c totally_fake_key=1` is accepted in silence unless
+  `--strict-config` is passed. So a future confinement flag added here is worth
+  testing against a live codex rather than trusting that it took.
+
+`-c mcp_servers.stigmergy.enabled=false` merges into the `[mcp_servers.stigmergy]`
+table that `stigmergy init --host codex` writes. If codex has *not* been configured
+for stigmergy, the override instead creates a table with no transport and codex
+refuses to start: `Error loading config.toml: invalid transport`. That is confusing
+but harmless — the explorer's whole purpose is to not see stigmergy, and on such a
+machine it already cannot.
 
 The explorer reports back; the root decides what to record. Memories and claims stay
 the root's to write.
@@ -502,10 +685,19 @@ write access, it is actively invited to register as a root of its own.
 
 ## Probing the hosts
 
-Several details of both hosts' hook payloads are documented poorly or not at all.
-`stigmergy hook dump --tag <label>` is the instrument: wire it up as a hook, and it
-appends the raw stdin JSON to `$XDG_STATE_HOME/stigmergy/probe.jsonl` (mode `0600`)
-as `{"tag": …, "at": …, "payload": …}`.
+Several details of every host's hook payloads are documented poorly, not at all, or
+wrongly. `stigmergy hook dump --tag <label>` is the instrument: wire it up as a hook,
+and it appends the raw stdin JSON to `$XDG_STATE_HOME/stigmergy/probe.jsonl` (mode
+`0600`) as `{"tag": …, "at": …, "payload": …}`. It is host-neutral — on opencode, a
+throwaway plugin can pipe every hook into it.
+
+The opencode work is the argument for doing this first, every time. Reading its binary
+answered more than its documentation did, and a live session then contradicted the
+binary reading: `experimental.chat.system.transform` looked like the obvious home for
+the registration text right up until a probe caught it firing for the hidden title
+generator, and part ids turned out to need a `prt` prefix that nothing anywhere
+mentions — a plugin that gets it wrong has its text silently dropped and reports no
+error at all. Neither would have been found by reasoning, and both would have shipped.
 
 Use it to settle the assumptions this document flags as unverified — in particular
 the subagent indicator: capture a root's payload and a Task subagent's, and diff them.

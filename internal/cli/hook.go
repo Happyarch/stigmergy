@@ -16,8 +16,10 @@ import (
 
 func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "hook",
-		Short: "Host hook handlers (invoked by Claude Code, Codex and Antigravity, not by hand)",
+		Use: "hook",
+		// Not a host list: this one has been out of date twice already, and
+		// nothing here depends on knowing which hosts exist.
+		Short: "Host hook handlers (invoked by the agent hosts, not by hand)",
 		Long: "Hook handlers read a host's JSON payload on stdin and write a decision on stdout.\n" +
 			"They are wired up by `stigmergy init` and are not meant to be run directly.",
 	}
@@ -25,6 +27,7 @@ func newHookCmd() *cobra.Command {
 		newMailGateCmd(), newMailNotifyCmd(), newHookDumpCmd())
 	cmd.AddCommand(newCodexHookCmds()...)
 	cmd.AddCommand(newAntigravityHookCmds()...)
+	cmd.AddCommand(newOpenCodeHookCmds()...)
 	return cmd
 }
 

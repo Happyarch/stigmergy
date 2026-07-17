@@ -14,7 +14,7 @@ observed), [operations.md](operations.md) (running it).
 
 ## 1. The problem
 
-Claude Code and Codex each keep their own memory, per host and per session. Run
+Claude Code, Codex, Antigravity and opencode each keep their own memory, per host and per session. Run
 two agents on one repository and they diverge immediately: they learn different
 things, forget them separately, and overwrite each other's files without ever
 knowing the other was there.
@@ -536,10 +536,17 @@ Only roots may mutate. Enforcing that differs by host:
   `stigmergy hook dump` exists to settle it. If none does, this gate is advisory.
 - **Codex**: native subagents inherit the parent's sandbox and permissions, so they
   are *not* an isolation boundary. That is why `stigmergy explore` exists: it runs
-  `codex exec --sandbox read-only --ask-for-approval never --ephemeral -c
+  `codex exec --sandbox read-only -c approval_policy="never" --ephemeral -c
   mcp_servers.stigmergy.enabled=false`. The explorer cannot write the tree and
   cannot even *see* stigmergy's tools — it has no way to register, claim, or write
   a memory. It reports back; the root decides what to record.
+
+  The approval policy goes through `-c` because `--ask-for-approval` is a
+  top-level flag that `codex exec` does not accept — it is an unknown argument
+  there, and the explorer dies on argument parsing before the model is reached.
+  It was written the obvious way for months and nothing noticed, because a flag
+  list is not the kind of thing anyone tests and codex does not run in CI. See
+  [hosts.md](hosts.md) for the full trap list; `internal/explore` now has tests.
 
 ---
 

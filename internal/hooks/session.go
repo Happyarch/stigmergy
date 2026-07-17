@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/happyarch/stigmergy/internal/gitx"
+	"github.com/happyarch/stigmergy/internal/hosts"
 	"github.com/happyarch/stigmergy/internal/store"
 )
 
@@ -14,6 +15,30 @@ import (
 // decision is already made by then; an audit write that cannot finish quickly
 // is dropped rather than allowed to add latency to the agent's edit.
 const auditBudget = 100 * time.Millisecond
+
+// Registered reports whether this host session has already registered as a root.
+//
+// It exists for hosts whose only way of reaching an agent fires repeatedly.
+// Claude Code and Codex have a session-start event, so the registration text is
+// naturally said once; opencode's nearest equivalent runs on every user prompt,
+// and an agent that has done as it was asked should not be asked again for the
+// rest of its life.
+//
+// False when the answer cannot be had — no repository, no database, no root.
+// Saying the instructions twice is a much smaller failure than never saying them
+// at all, so the doubt resolves towards telling the agent.
+func Registered(agentKind, sessionLabel, cwd string) bool {
+	if sessionLabel == "" {
+		return false
+	}
+	db, _, ok := openProject(cwd)
+	if !ok {
+		return false
+	}
+	defer db.Close()
+	root, err := db.RootBySession(agentKind, sessionLabel)
+	return err == nil && root != nil
+}
 
 // SessionStartText is injected into an agent's context when a session begins.
 //
@@ -48,8 +73,22 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 		"two agents in the same host apart.\n\n")
 	sb.WriteString("Use session_label exactly as given: it is how stigmergy knows which claims are yours. " +
 		"Until you register, every claim in the repository — including any you made earlier — will block your edits.\n\n")
-	sb.WriteString("Then: memory_search before starting work, and claim_acquire before editing files others might touch. " +
-		"Edits to files claimed by another agent are blocked.\n")
+	sb.WriteString("Then: memory_search before starting work, and claim_acquire before editing files others might touch.\n")
+
+	// What follows is true of this host and not necessarily of the next one.
+	// This paragraph used to end "Edits to files claimed by another agent are
+	// blocked" for everyone, which is Claude Code's guarantee — on Codex the edit
+	// lands and the turn is halted afterwards, so the agent most in need of
+	// checking claims itself was the one being told it did not have to.
+	if h, ok := hosts.Get(agentKind); ok {
+		sb.WriteString("\n")
+		sb.WriteString(h.ClaimRule())
+		sb.WriteString("\n")
+		sb.WriteString(h.MailRule())
+		sb.WriteString("\n")
+		sb.WriteString(h.SubagentRule())
+		sb.WriteString("\n")
+	}
 
 	if claims := activeClaimSummary(repo); claims != "" {
 		sb.WriteString("\nClaims currently held by other agents:\n")

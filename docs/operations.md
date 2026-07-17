@@ -177,13 +177,21 @@ trustworthy, and every enforcement guarantee here rests on that locking.
 
 ## Failure modes, and which way they fail
 
-| Situation | Claude Code | Codex |
-|---|---|---|
-| No project database (not adopted) | allow — stays out of the way | allow |
-| Not a git repository | allow | allow |
-| Unparseable hook payload | **allow** — our bug must not block the user's work | allow |
-| Database unreadable / schema mismatch | **deny**, and say to run `doctor` | **silent** — see below |
-| Claim held by another root | **deny** | warn, then halt the turn after the edit lands |
+| Situation | Claude Code, Antigravity | opencode | Codex |
+|---|---|---|---|
+| No project database (not adopted) | allow — stays out of the way | allow | allow |
+| Not a git repository | allow | allow | allow |
+| Unparseable hook payload | **allow** — our bug must not block the user's work | **allow** | allow |
+| stigmergy binary missing or crashed | allow (the hook never runs) | **allow** — the plugin turns every failure into a null | allow |
+| Database unreadable / schema mismatch | **deny**, and say to run `doctor` | **deny**, and say to run `doctor` | **silent** — see below |
+| Claim held by another root | **deny** | **deny** | warn, then halt the turn after the edit lands |
+
+opencode's row for a missing binary is worth stating out loud, because it is the one
+host where stigmergy is code running inside the agent rather than a hook the host
+calls. The plugin throws to block an edit, and a throw is exactly what opencode turns
+into a failed tool call — so a plugin that threw on its own errors would convert a
+missing `stigmergy` binary into a repository where nothing can be written. It returns
+null on every failure instead, and only a genuine deny throws.
 
 The Codex cell in that fourth row is deliberate. `Guard` fails closed, but
 `codex-claim-warn` only speaks when there are real conflicts — and a fail-closed

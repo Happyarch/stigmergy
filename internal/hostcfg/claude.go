@@ -66,8 +66,16 @@ func ClaudePaths(worktree string) (mcpJSON, settings, memory string) {
 
 // InstallClaude registers the MCP server and hooks in a project, merging into
 // whatever is already there.
+//
+// It no longer writes a block into CLAUDE.md. The instructions an agent needs
+// now reach it two ways it cannot miss and we do not have to maintain: the
+// shared rules ride the MCP server's initialize.instructions, which every host
+// surfaces to the model, and the host-specific facts are handed over by the
+// session-start hook, which is also the only thing that knows the session_label.
+// The file was a third copy of both, and the copies drifted apart until they
+// contradicted each other. See internal/hosts.
 func InstallClaude(worktree string) error {
-	mcpPath, settingsPath, memoryPath := ClaudePaths(worktree)
+	mcpPath, settingsPath, _ := ClaudePaths(worktree)
 
 	mcpCfg, err := ReadJSON(mcpPath)
 	if err != nil {
@@ -87,11 +95,7 @@ func InstallClaude(worktree string) error {
 	}
 	setClaudeHooks(settings, true)
 	settings[AutoMemoryKey] = false
-	if err := WriteJSON(settingsPath, settings); err != nil {
-		return err
-	}
-
-	return WriteMarkerBlock(memoryPath, ClaudeBlurb())
+	return WriteJSON(settingsPath, settings)
 }
 
 // RemoveClaude takes stigmergy back out, leaving the user's own configuration

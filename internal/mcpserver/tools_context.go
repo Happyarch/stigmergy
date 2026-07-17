@@ -97,7 +97,11 @@ func (s *Session) contextOpen(_ context.Context, _ *mcp.CallToolRequest, in Cont
 // harness. The answer is unverified and nothing keys off it, which is exactly
 // why asking is fine — the cost of a wrong one is a wrong line in the roster.
 type RootRegisterInput struct {
-	AgentKind    string `json:"agent_kind" jsonschema:"which host you are: claude-code, codex, or antigravity"`
+	// The host list is spelled out because a jsonschema tag is a compile-time
+	// constant and cannot be built from the hosts registry. It is the one place
+	// left that repeats the set, so a test asserts it still matches — see
+	// TestTheAgentKindSchemaNamesEveryHost.
+	AgentKind    string `json:"agent_kind" jsonschema:"which host you are: claude-code, codex, antigravity, or opencode"`
 	Worktree     string `json:"worktree" jsonschema:"absolute path of the worktree you are working in"`
 	Branch       string `json:"branch,omitempty" jsonschema:"branch you are on, if known"`
 	SessionLabel string `json:"session_label,omitempty" jsonschema:"your host session id; supply it so your own edits are not blocked by your own claims"`

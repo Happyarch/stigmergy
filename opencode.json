@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "stigmergy": {
+      "command": [
+        "stigmergy",
+        "mcp"
+      ],
+      "enabled": true,
+      "type": "local"
+    }
+  }
+}

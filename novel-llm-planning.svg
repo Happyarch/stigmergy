@@ -1,0 +1,113 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="100%" height="100%">
+  <defs>
+    <!-- Arrowhead marker -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333"/>
+    </marker>
+    <!-- Drop shadow for boxes -->
+    <filter id="shadow" x="-5%" y="-5%" width="115%" height="115%">
+      <feDropShadow dx="2" dy="2" stdDeviation="2" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+  <style>
+    .font-base { font-family: 'Segoe UI', Arial, sans-serif; }
+    .title { font-size: 16px; font-weight: bold; fill: #333; }
+    .subtitle { font-size: 12px; fill: #666; }
+    .label { font-size: 13px; font-weight: bold; fill: #555; }
+    .line { fill: none; stroke: #333; stroke-width: 2; stroke-linejoin: round; }
+    .box { stroke-width: 2; filter: url(#shadow); rx: 8; }
+    
+    .start-end { fill: #eceff1; stroke: #546e7a; }
+    .init { fill: #ffffff; stroke: #90a4ae; }
+    .planner { fill: #e3f2fd; stroke: #1e88e5; }
+    .guide { fill: #e8f5e9; stroke: #43a047; }
+    .adversary { fill: #ffebee; stroke: #e53935; }
+    .decision { fill: #fff3e0; stroke: #fb8c00; stroke-width: 2; filter: url(#shadow); }
+    .rotate { fill: #f3e5f5; stroke: #8e24aa; }
+    .boundary { fill: #fafafa; stroke: #b0bec5; stroke-width: 2; stroke-dasharray: 8,4; rx: 12; }
+  </style>
+  <!-- Group: Bounding Box for Round Pipeline -->
+  <rect x="60" y="190" width="620" height="770" class="boundary"/>
+  <text x="80" y="220" class="font-base" font-size="14" font-weight="bold" fill="#78909c" letter-spacing="1">THE ROUND PIPELINE (STIGMERGY LAYER)</text>
+  <!-- Connectors (Drawn first so they are under the boxes) -->
+  <g class="line" marker-end="url(#arrow)">
+    <!-- Start to Init -->
+    <path d="M 500 70 L 500 100"/>
+    <!-- Init to Planner 1 -->
+    <path d="M 500 170 L 500 230"/>
+    <!-- Planner 1 to Guide -->
+    <path d="M 500 290 L 500 350"/>
+    <!-- Guide to Planner 2 -->
+    <path d="M 500 410 L 500 470"/>
+    <!-- Planner 2 to Adversary -->
+    <path d="M 500 530 L 500 590"/>
+    <!-- Adversary to Dec1 -->
+    <path d="M 500 650 L 500 690"/>
+    <!-- Dec1 YES to End -->
+    <path d="M 600 740 L 750 740"/>
+    <!-- Dec1 NO to Dec2 -->
+    <path d="M 500 790 L 500 830"/>
+    <!-- Dec2 YES to End -->
+    <path d="M 600 880 L 800 880 L 800 770"/>
+    <!-- Dec2 NO to Rotate -->
+    <path d="M 400 880 L 320 880"/>
+    <!-- Rotate to Planner 1 -->
+    <path d="M 220 840 L 220 260 L 370 260"/>
+    <!-- End to Output -->
+    <path d="M 800 710 L 800 630"/>
+  </g>
+  <!-- Edge Labels -->
+  <text x="515" y="325" class="font-base label">Draft Spec</text>
+  <text x="515" y="445" class="font-base label">Questions</text>
+  <text x="515" y="565" class="font-base label">Revised Spec</text>
+  <text x="615" y="730" class="font-base label" fill="#2e7d32">YES (Pass)</text>
+  <text x="515" y="815" class="font-base label" fill="#c62828">NO</text>
+  <text x="615" y="870" class="font-base label" fill="#c62828">YES (Max Reached)</text>
+  <text x="380" y="870" class="font-base label" fill="#2e7d32">NO</text>
+  <text x="235" y="540" class="font-base label" fill="#6a1b9a">Critique &amp; New Map</text>
+  <!-- Nodes -->
+  <!-- Start -->
+  <ellipse cx="500" cy="50" rx="60" ry="25" class="box start-end"/>
+  <text x="500" y="55" class="font-base title" text-anchor="middle">START</text>
+  <!-- Initialize -->
+  <rect x="360" y="100" width="280" height="70" class="box init"/>
+  <text x="500" y="125" class="font-base title" text-anchor="middle">INITIALIZE</text>
+  <text x="500" y="145" class="font-base subtitle" text-anchor="middle">Seed Idea, Max Rounds, Maps</text>
+  <!-- Planner Drafts Spec -->
+  <rect x="380" y="230" width="240" height="60" class="box planner"/>
+  <text x="500" y="255" class="font-base title" text-anchor="middle">Planner Drafts Spec</text>
+  <text x="500" y="275" class="font-base subtitle" text-anchor="middle">(Agent A)</text>
+  <!-- Socratic Guide -->
+  <rect x="380" y="350" width="240" height="60" class="box guide"/>
+  <text x="500" y="375" class="font-base title" text-anchor="middle">Guide Interrogates</text>
+  <text x="500" y="395" class="font-base subtitle" text-anchor="middle">(Agent B)</text>
+  <!-- Planner Revises Spec -->
+  <rect x="380" y="470" width="240" height="60" class="box planner"/>
+  <text x="500" y="495" class="font-base title" text-anchor="middle">Planner Revises Spec</text>
+  <text x="500" y="515" class="font-base subtitle" text-anchor="middle">(Agent A)</text>
+  <!-- Adversary Teardown -->
+  <rect x="380" y="590" width="240" height="60" class="box adversary"/>
+  <text x="500" y="615" class="font-base title" text-anchor="middle">Adversary Teardown</text>
+  <text x="500" y="635" class="font-base subtitle" text-anchor="middle">(Agent C)</text>
+  <!-- Decision 1: Adversary Pass -->
+  <path d="M 500 690 L 600 740 L 500 790 L 400 740 Z" class="decision"/>
+  <text x="500" y="735" class="font-base title" text-anchor="middle" font-size="14">Adversary</text>
+  <text x="500" y="755" class="font-base title" text-anchor="middle" font-size="14">Gives Pass?</text>
+  <!-- Decision 2: Max Rounds -->
+  <path d="M 500 830 L 600 880 L 500 930 L 400 880 Z" class="decision"/>
+  <text x="500" y="875" class="font-base title" text-anchor="middle" font-size="14">Round &gt;=</text>
+  <text x="500" y="895" class="font-base title" text-anchor="middle" font-size="14">Max Rounds?</text>
+  <!-- Rotate Agents -->
+  <rect x="120" y="840" width="200" height="75" class="box rotate"/>
+  <text x="220" y="865" class="font-base title" text-anchor="middle">Shift Agents Left &amp;</text>
+  <text x="220" y="885" class="font-base title" text-anchor="middle">Increment Round</text>
+  <text x="220" y="905" class="font-base subtitle" text-anchor="middle" fill="#6a1b9a">(A, B, C &#x2192; B, C, A)</text>
+  <!-- End -->
+  <ellipse cx="800" cy="740" rx="50" ry="30" class="box start-end"/>
+  <text x="800" y="745" class="font-base title" text-anchor="middle">END</text>
+  <!-- Output Spec -->
+  <rect x="730" y="580" width="140" height="50" class="box init"/>
+  <text x="800" y="600" class="font-base title" text-anchor="middle">Final Validated</text>
+  <text x="800" y="620" class="font-base title" text-anchor="middle">Specification</text>
+</svg>

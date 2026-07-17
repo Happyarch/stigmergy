@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -111,9 +112,10 @@ func TestRebuildingRootsKeepsChildForeignKeysIntact(t *testing.T) {
 	}
 }
 
-// The widened constraint has to actually admit the kind it was widened for,
-// and still refuse everything else.
-func TestAgentKindConstraintAfterTheRebuild(t *testing.T) {
+// Every declared host must be storable. This used to prove that AgentKinds and
+// a CHECK constraint agreed; 0006 removed the CHECK, so it now proves the
+// simpler thing the rebuild could have broken — that a real row still goes in.
+func TestEveryAgentKindCanBeStored(t *testing.T) {
 	db := testProject(t)
 
 	for _, kind := range AgentKinds {
@@ -125,11 +127,43 @@ func TestAgentKindConstraintAfterTheRebuild(t *testing.T) {
 			t.Errorf("agent_kind %q is in AgentKinds but the schema rejects it: %v", kind, err)
 		}
 	}
+}
+
+// The set is still closed — it is just closed in Go now.
+//
+// This is the half that matters, because it is the half an agent actually
+// reaches: nothing writes a root without going through RegisterRoot first. The
+// CHECK could only ever have caught a caller that had already bypassed this,
+// and it would have caught it with a raw SQLite constraint error instead of a
+// sentence naming the hosts that exist.
+func TestRegisterStillRefusesAnUnknownHost(t *testing.T) {
+	db := testProject(t)
+
+	if _, _, err := db.RegisterRoot(Registration{
+		AgentKind: "cursor",
+		Worktree:  "/wt",
+	}); err == nil {
+		t.Fatal("RegisterRoot accepted a host that is not in AgentKinds")
+	} else if !strings.Contains(err.Error(), "cursor") {
+		t.Errorf("the rejection should name the kind it refused, got: %v", err)
+	}
+}
+
+// 0006 deliberately left agent_kind unconstrained in the schema, so that adding
+// a host is a Go edit rather than a table rebuild. If someone reintroduces a
+// CHECK here, the next host to be added will silently fail to register in the
+// field while passing every test that only exercises the hosts we already have —
+// so say it out loud instead.
+func TestTheSchemaDoesNotConstrainAgentKind(t *testing.T) {
+	db := testProject(t)
+
 	if _, err := db.Exec(
 		`INSERT INTO roots(root_id, agent_kind, worktree, registered_at, last_seen_at)
 		 VALUES(?, ?, ?, ?, ?)`,
-		"r-nope", "cursor", "/wt", Now(), Now(),
-	); err == nil {
-		t.Error("the schema accepted an agent_kind that is not in AgentKinds")
+		"r-future", "a-host-that-does-not-exist-yet", "/wt", Now(), Now(),
+	); err != nil {
+		t.Errorf("the schema is constraining agent_kind again: %v\n"+
+			"0006 removed that on purpose — the closed set lives in internal/hosts, "+
+			"and a CHECK here costs a table rebuild per host.", err)
 	}
 }

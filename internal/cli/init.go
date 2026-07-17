@@ -13,6 +13,7 @@ import (
 
 	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/hostcfg"
+	"github.com/happyarch/stigmergy/internal/hosts"
 	"github.com/happyarch/stigmergy/internal/store"
 	"github.com/happyarch/stigmergy/internal/xdg"
 )
@@ -35,8 +36,9 @@ func newInitCmd() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if host != "all" && host != "claude" && host != "codex" && host != "antigravity" {
-				return fmt.Errorf("--host must be all, claude, codex, or antigravity, got %q", host)
+			if !validHost(host) {
+				return fmt.Errorf("--host must be all or one of %s, got %q",
+					strings.Join(hosts.Flags(), ", "), host)
 			}
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -63,12 +65,28 @@ func newInitCmd() *cobra.Command {
 			return maybeImportLegacyMemories(out, os.Stdin, repo, noInput)
 		},
 	}
-	cmd.Flags().StringVar(&host, "host", "all", "which hosts to configure: all, claude, codex, or antigravity")
+	cmd.Flags().StringVar(&host, "host", "all",
+		"which hosts to configure: all, or one of "+strings.Join(hosts.Flags(), ", "))
 	cmd.Flags().BoolVar(&remove, "remove", false, "remove stigmergy's configuration from this repository")
 	cmd.Flags().BoolVar(&noInput, "no-input", false, "never prompt; print what to run instead")
 	cmd.Flags().BoolVar(&purgeDB, "purge-db", false, "with --remove: also delete the project database and every memory in it")
 	cmd.Flags().BoolVar(&yes, "yes", false, "with --purge-db: skip the confirmation prompt")
 	return cmd
+}
+
+// validHost accepts "all" or any flag the hosts registry declares. Adding a
+// host used to mean remembering to widen a hand-written condition here; now
+// forgetting is not possible, because there is nowhere to forget it.
+func validHost(flag string) bool {
+	if flag == "all" {
+		return true
+	}
+	for _, f := range hosts.Flags() {
+		if f == flag {
+			return true
+		}
+	}
+	return false
 }
 
 func runInit(out io.Writer, repo *gitx.Repo, host string) error {
@@ -99,26 +117,24 @@ func runInit(out io.Writer, repo *gitx.Repo, host string) error {
 		if err := hostcfg.InstallClaude(repo.WorktreeRoot); err != nil {
 			return fmt.Errorf("could not configure Claude Code: %w", err)
 		}
-		mcpPath, settingsPath, memoryPath := hostcfg.ClaudePaths(repo.WorktreeRoot)
+		mcpPath, settingsPath, _ := hostcfg.ClaudePaths(repo.WorktreeRoot)
 		fmt.Fprintln(out, "Claude Code")
 		fmt.Fprintf(out, "  %s          MCP server\n", mcpPath)
-		fmt.Fprintf(out, "  %s  hooks (claim enforcement)\n", settingsPath)
-		fmt.Fprintf(out, "  %s         instructions\n\n", memoryPath)
+		fmt.Fprintf(out, "  %s  hooks (claim enforcement)\n\n", settingsPath)
 	}
 
 	if host == "all" || host == "codex" {
 		if err := hostcfg.InstallCodex(repo.WorktreeRoot); err != nil {
 			return fmt.Errorf("could not configure Codex: %w", err)
 		}
-		cfgPath, hooksPath, memoryPath := hostcfg.CodexPaths(repo.WorktreeRoot)
+		cfgPath, hooksPath, _ := hostcfg.CodexPaths(repo.WorktreeRoot)
 		fmt.Fprintln(out, "Codex")
 		fmt.Fprintf(out, "  %s   MCP server\n", cfgPath)
-		fmt.Fprintf(out, "  %s    hooks (claim warnings)\n", hooksPath)
-		fmt.Fprintf(out, "  %s          instructions\n\n", memoryPath)
+		fmt.Fprintf(out, "  %s    hooks (claim warnings)\n\n", hooksPath)
 		fmt.Fprintln(out, "  Codex loads project config and hooks only for TRUSTED projects.")
 		fmt.Fprintln(out, "  Start Codex here, trust the project when prompted, and review the hooks with /hooks.")
 		fmt.Fprintln(out, "  Codex cannot block an edit before it lands: claims there are enforced by halting")
-		fmt.Fprintln(out, "  the turn afterwards. See AGENTS.md.")
+		fmt.Fprintln(out, "  the turn afterwards.")
 		fmt.Fprintln(out)
 	}
 
@@ -129,9 +145,24 @@ func runInit(out io.Writer, repo *gitx.Repo, host string) error {
 		pluginDir := hostcfg.AntigravityPluginDir(repo.WorktreeRoot)
 		fmt.Fprintln(out, "Antigravity")
 		fmt.Fprintf(out, "  %s\n", pluginDir)
-		fmt.Fprintln(out, "  (plugin.json, mcp_config.json, hooks.json, rules/stigmergy.md)")
+		fmt.Fprintln(out, "  (plugin.json, mcp_config.json, hooks.json)")
 		fmt.Fprintln(out, "  Antigravity reads the plugin automatically from .agents/plugins/.")
 		fmt.Fprintln(out, "  Your conversationId is the session_label for root_register — the pre-invocation hook tells you it.")
+		fmt.Fprintln(out)
+	}
+
+	if host == "all" || host == "opencode" {
+		if err := hostcfg.InstallOpenCode(repo.WorktreeRoot); err != nil {
+			return fmt.Errorf("could not configure opencode: %w", err)
+		}
+		configPath, pluginPath := hostcfg.OpenCodePaths(repo.WorktreeRoot)
+		fmt.Fprintln(out, "opencode")
+		fmt.Fprintf(out, "  %s        MCP server\n", configPath)
+		fmt.Fprintf(out, "  %s  hooks (claim enforcement)\n", pluginPath)
+		fmt.Fprintln(out, "  The plugin loads automatically from .opencode/plugin/ and shells out to stigmergy,")
+		fmt.Fprintln(out, "  so the binary must be on PATH for the agents opencode runs.")
+		fmt.Fprintln(out, "  opencode has no end-of-turn hook: mail is delivered as a turn begins, but an")
+		fmt.Fprintln(out, "  agent can finish without reading it.")
 		fmt.Fprintln(out)
 	}
 
@@ -158,6 +189,12 @@ func runRemove(out io.Writer, repo *gitx.Repo, host string, purgeDB, yes bool) e
 			return fmt.Errorf("could not remove the Antigravity configuration: %w", err)
 		}
 		fmt.Fprintln(out, "Removed stigmergy from the Antigravity configuration.")
+	}
+	if host == "all" || host == "opencode" {
+		if err := hostcfg.RemoveOpenCode(repo.WorktreeRoot); err != nil {
+			return fmt.Errorf("could not remove the opencode configuration: %w", err)
+		}
+		fmt.Fprintln(out, "Removed stigmergy from the opencode configuration.")
 	}
 
 	dbPath := store.ProjectDBPath(repo.CommonDir)

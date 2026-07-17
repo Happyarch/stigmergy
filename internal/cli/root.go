@@ -14,9 +14,13 @@ import (
 var Version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:           "stigmergy",
-	Short:         "Shared memory, claims, and mailbox for multi-agent projects",
-	Long:          "stigmergy coordinates Claude Code and Codex agents working in the same repository:\nshared project/global memories, file claims, and root-to-root negotiation.",
+	Use:   "stigmergy",
+	Short: "Shared memory, claims, and mailbox for multi-agent projects",
+	// Deliberately does not name the hosts. This sentence said "Claude Code and
+	// Codex" through the whole of Antigravity's life, and would have said it
+	// through opencode's too; the supported hosts are `stigmergy doctor`'s
+	// business, and it reads them from the registry.
+	Long:          "stigmergy coordinates the agents working in the same repository:\nshared project/global memories, file claims, and root-to-root negotiation.",
 	Version:       Version,
 	SilenceUsage:  true,
 	SilenceErrors: false,
@@ -40,5 +44,6 @@ func init() {
 	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newInitCmd())
 	rootCmd.AddCommand(newExploreCmd())
+	rootCmd.AddCommand(newDeliberateCmd())
 	rootCmd.AddCommand(newImportCmd())
 }

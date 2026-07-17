@@ -11,6 +11,7 @@ import (
 
 	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/hostcfg"
+	"github.com/happyarch/stigmergy/internal/hosts"
 	"github.com/happyarch/stigmergy/internal/store"
 	"github.com/happyarch/stigmergy/internal/xdg"
 )
@@ -164,7 +165,6 @@ func runDoctor(out io.Writer, gc bool) error {
 func checkHostConfig(d *diag, worktree string) {
 	mcpPath, settingsPath, claudeMemory := hostcfg.ClaudePaths(worktree)
 	codexConfig, codexHooks, codexMemory := hostcfg.CodexPaths(worktree)
-	_, _, _, antigravityRules := hostcfg.AntigravityPaths(worktree)
 
 	antigravityMCP, antigravityHooks := antigravityConfigPaths(worktree)
 
@@ -175,20 +175,24 @@ func checkHostConfig(d *diag, worktree string) {
 	// reports nothing, because it is the answer someone stops investigating at.
 	antigravity := fileContains(antigravityMCP, "stigmergy") && fileContains(antigravityHooks, "stigmergy hook")
 
-	hosts := []struct {
-		name       string
-		configured bool
-		flag       string
-	}{
-		{"Claude Code", claude, "claude"},
-		{"Codex", codex, "codex"},
-		{"Antigravity", antigravity, "antigravity"},
+	openCodeConfig, openCodePlugin := hostcfg.OpenCodePaths(worktree)
+	opencode := fileContains(openCodeConfig, "stigmergy") && fileContains(openCodePlugin, "stigmergy hook")
+
+	// Keyed by agent_kind and walked in registry order, so a host that exists but
+	// is missing here shows up as a blank row rather than as nothing at all. The
+	// old version was a hand-written list of three, and a fourth host could have
+	// been fully installed and still reported "not configured" by never appearing.
+	detected := map[string]bool{
+		"claude-code": claude,
+		"codex":       codex,
+		"antigravity": antigravity,
+		"opencode":    opencode,
 	}
 
 	var configured []string
-	for _, h := range hosts {
-		if h.configured {
-			configured = append(configured, h.name)
+	for _, h := range hosts.All() {
+		if detected[h.Kind] {
+			configured = append(configured, h.Name)
 		}
 	}
 
@@ -201,14 +205,30 @@ func checkHostConfig(d *diag, worktree string) {
 	default:
 		d.pass("%s are configured", joinWords(configured))
 	}
-	for _, h := range hosts {
-		if !h.configured && len(configured) > 0 {
-			d.warn("%s is not configured here — run `stigmergy init --host %s` if you use it", h.name, h.flag)
+	for _, h := range hosts.All() {
+		if !detected[h.Kind] && len(configured) > 0 {
+			d.warn("%s is not configured here — run `stigmergy init --host %s` if you use it", h.Name, h.Flag)
 		}
 	}
 
-	if claude && !hostcfg.HasMarkerBlock(claudeMemory) {
-		d.warn("CLAUDE.md has no stigmergy block — agents will not be told to use it")
+	// A stigmergy block used to be written into these files, and the check here
+	// used to be the other way round: it warned when one was MISSING. Now the
+	// instructions travel with the MCP server and the session-start hook, and a
+	// block left behind is a liability rather than a help — it is a frozen copy
+	// of what stigmergy said on the day it was written, and the agent has no way
+	// to know it is out of date. Nothing breaks if it stays, so this reports
+	// rather than deletes: the file is the user's, and `init --remove` is the
+	// thing that takes stigmergy's text back out.
+	for _, f := range []struct{ name, path string }{
+		{"CLAUDE.md", claudeMemory},
+		{"AGENTS.md", codexMemory},
+	} {
+		if hostcfg.HasMarkerBlock(f.path) {
+			d.warn("%s still has a stigmergy block — it is no longer written or updated", f.name)
+			d.note("The instructions now come from the MCP server and the session-start hook, so the")
+			d.note("block is a stale copy that may contradict them. Delete it, or run")
+			d.note("`stigmergy init --remove` and then `stigmergy init` to take it out cleanly.")
+		}
 	}
 	// Two memory systems in one project is the divergence stigmergy exists to
 	// end, and it is silent: both stores look healthy while drifting apart.
@@ -218,15 +238,9 @@ func checkHostConfig(d *diag, worktree string) {
 		d.note("worth keeping (`stigmergy import claude-memory`), then re-run `stigmergy init`,")
 		d.note("which sets \"autoMemoryEnabled\": false in .claude/settings.json.")
 	}
-	if codex && !hostcfg.HasMarkerBlock(codexMemory) {
-		d.warn("AGENTS.md has no stigmergy block — agents will not be told to use it")
-	}
 	if codex {
 		d.note("Codex loads project hooks only for TRUSTED projects: trust this project in Codex")
 		d.note("and review the hooks with /hooks, or none of this takes effect there.")
-	}
-	if antigravity && !hostcfg.HasMarkerBlock(antigravityRules) {
-		d.warn("rules/stigmergy.md has no stigmergy block — Antigravity agents will not be told to use it")
 	}
 }
 
@@ -254,7 +268,7 @@ func fileContains(path, needle string) bool {
 // Antigravity plugin is really installed: the MCP server registration and the
 // hooks. The plugin directory existing says only that something once ran.
 func antigravityConfigPaths(worktree string) (mcpConfig, hooksJSON string) {
-	_, mcp, hooks, _ := hostcfg.AntigravityPaths(worktree)
+	_, mcp, hooks := hostcfg.AntigravityPaths(worktree)
 	return mcp, hooks
 }
 
