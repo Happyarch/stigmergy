@@ -65,8 +65,10 @@ func NewAdapter(kind string) (Adapter, error) {
 		return claudeAdapter{}, nil
 	case "antigravity":
 		return antigravityAdapter{}, nil
+	case "opencode":
+		return opencodeAdapter{}, nil
 	default:
-		return nil, fmt.Errorf("no deliberate adapter for host %q (have: codex, claude-code, antigravity)", kind)
+		return nil, fmt.Errorf("no deliberate adapter for host %q (have: codex, claude-code, antigravity, opencode)", kind)
 	}
 }
 

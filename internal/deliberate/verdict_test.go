@@ -69,6 +69,32 @@ func TestParseVerdict(t *testing.T) {
 			why:      "models produce both shapes; the difference is not worth a round",
 		},
 		{
+			name: "unfenced object, valid sentinel",
+			out: "1. Uphold Finding 1: the helper overreads the short OAM table.\n" +
+				"2. Dismiss Finding 5: it may delay work but does not change the result.\n\n" +
+				"{\"verdict\":\"FAIL\",\"findings\":[" +
+				"{\"category\":\"logic\",\"severity\":\"high\",\"summary\":\"s\",\"failure\":\"f\",\"where\":\"§4\"}" +
+				"]}\nVERDICT: FAIL\n",
+			wantPass: false,
+			wantN:    1,
+			why:      "codex drops the ```json fence in the Judge role; its findings are still right there in the prose",
+		},
+		{
+			name: "unfenced PASS that also lists findings",
+			out: "{\"verdict\":\"PASS\",\"findings\":[{\"summary\":\"actually this breaks\"}]}\n" +
+				"VERDICT: PASS\n",
+			wantPass: false,
+			wantN:    1,
+			why:      "the contradiction guard must fire even when the model omits the fence — else a false PASS ships",
+		},
+		{
+			name:     "brace in prose is not a findings block",
+			out:      "The retry set {a, b, c} looks fine, and so does the rest.\nVERDICT: PASS\n",
+			wantPass: true,
+			wantN:    0,
+			why:      "a stray brace span that is not valid findings JSON must not fabricate a critique or block a pass",
+		},
+		{
 			name:     "prose mentioning the word pass",
 			out:      "This does not pass muster.\nVERDICT: FAIL\n",
 			wantPass: false,

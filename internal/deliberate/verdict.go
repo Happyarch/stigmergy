@@ -76,26 +76,107 @@ func ParseVerdict(out string) (Verdict, error) {
 	return v, nil
 }
 
-// parseFindings pulls findings out of the fenced JSON, tolerating both the
-// documented object form and a bare array, because models produce both and the
-// difference is not worth a round.
+// parseFindings pulls findings out of the turn, tolerating both the documented
+// object form and a bare array, because models produce both and the difference
+// is not worth a round.
+//
+// The fenced ```json block is tried first: it is the documented form, and a
+// model that fenced its answer meant the fenced text to be it. But the fence is
+// the single most-dropped token — codex omits it in the Judge role and the
+// driver then reported zero findings while a well-formed object sat in plain
+// sight in the prose. Worse than a wrong count: with the findings unparsed, the
+// contradiction guard in [ParseVerdict] (a PASS that also lists flaws) never
+// fires, so an unfenced contradictory PASS would ship — the one outcome this
+// package exists to prevent. So when no fence yields findings, fall back to
+// scanning the raw turn for balanced JSON.
 func parseFindings(out string) []Finding {
 	for _, fence := range jsonFence.FindAllStringSubmatch(out, -1) {
-		body := strings.TrimSpace(fence[1])
-		if body == "" {
-			continue
-		}
-		var obj struct {
-			Verdict  string    `json:"verdict"`
-			Findings []Finding `json:"findings"`
-		}
-		if err := json.Unmarshal([]byte(body), &obj); err == nil && obj.Findings != nil {
-			return obj.Findings
-		}
-		var arr []Finding
-		if err := json.Unmarshal([]byte(body), &arr); err == nil && arr != nil {
-			return arr
+		if f := findingsFromJSON(strings.TrimSpace(fence[1])); f != nil {
+			return f
 		}
 	}
+	// Unfenced fallback: take the LAST balanced object/array that carries
+	// findings, mirroring the sentinel's "last one wins" — the real answer
+	// trails the reasoning, and any JSON quoted earlier as an example does not.
+	var found []Finding
+	for _, cand := range jsonCandidates(out) {
+		if f := findingsFromJSON(cand); f != nil {
+			found = f
+		}
+	}
+	return found
+}
+
+// findingsFromJSON reads one JSON document as either the documented
+// {"findings":[…]} object or a bare […] array. It returns nil for anything else
+// — including valid JSON with no findings key — so a caller can tell "not the
+// findings" from "an empty findings list".
+func findingsFromJSON(body string) []Finding {
+	if body == "" {
+		return nil
+	}
+	var obj struct {
+		Verdict  string    `json:"verdict"`
+		Findings []Finding `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(body), &obj); err == nil && obj.Findings != nil {
+		return obj.Findings
+	}
+	var arr []Finding
+	if err := json.Unmarshal([]byte(body), &arr); err == nil && arr != nil {
+		return arr
+	}
 	return nil
+}
+
+// jsonCandidates returns the balanced {…} and […] spans in s, in order, so the
+// fallback can try the JSON a model emitted without the documented fence.
+// json.Unmarshal is the real validator; this only has to find the spans worth
+// handing it, so brackets are counted loosely (a '{' closed by a ']' still
+// balances) and a candidate that is not valid JSON simply fails to parse.
+func jsonCandidates(s string) []string {
+	var out []string
+	for i := 0; i < len(s); i++ {
+		if s[i] != '{' && s[i] != '[' {
+			continue
+		}
+		if end := balancedEnd(s, i); end > i {
+			out = append(out, s[i:end])
+			i = end - 1 // resume after the span, not inside it
+		}
+	}
+	return out
+}
+
+// balancedEnd returns the index just past the bracket that closes the one at
+// start, or -1 if it never closes. String literals and their backslash escapes
+// are honoured so a bracket inside a JSON string does not move the depth count.
+func balancedEnd(s string, start int) int {
+	depth, inStr, esc := 0, false, false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
 }
