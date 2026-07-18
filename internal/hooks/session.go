@@ -64,16 +64,22 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 	host, hostKnown := hosts.Get(agentKind)
 	if hostKnown && host.SelfRegisters() && os.Getenv(host.SessionEnv) != "" {
 		// The MCP server registered this session from the environment before it
-		// began serving. Telling the agent to "register now" would send it chasing
-		// a handshake that has already happened, so this states the fact instead —
-		// and the agent that has nothing to do about registration is far more
-		// likely to get on with the part that matters: searching memory and
-		// claiming before it edits.
-		sb.WriteString("You are already registered as a root for this session. stigmergy did it for you " +
-			"from the session your host started — there is no context_open or root_register to run.\n\n")
-		sb.WriteString("So: memory_search before you start, and claim_acquire before editing a file others " +
-			"might touch. (Optional: root_register with model=\"<your model id>\" if you want the roster to " +
-			"show which model you are — nothing depends on it.)\n")
+		// began serving, so there is no handshake left to run. The trap is to say
+		// only that: "you are registered, nothing to do" reads as ambient FYI, and
+		// the agent gets on with the user's task without ever searching memory or
+		// claiming a file — the two things that actually make it a participant.
+		// (Codex, which is NOT self-registered, complies precisely because it is
+		// handed a numbered chore.) So lead with the two calls that are the job,
+		// and demote the registration to the reason it can skip a step, not the
+		// headline. It must not undercut the actions as optional — that is exactly
+		// what a self-registering agent was doing wrong.
+		sb.WriteString("Before you plan or touch code this session, two calls, in this order:\n" +
+			"  1. memory_search for what you are about to work on — other agents have left notes here, " +
+			"and you are not starting from a blank page.\n" +
+			"  2. claim_acquire every file you are going to edit, before you edit it.\n\n")
+		sb.WriteString("You do NOT need context_open or root_register: stigmergy already registered you " +
+			"as a root from the session your host started. That handshake is done — skip it and go straight " +
+			"to the two calls above, which are the part that actually protects your work.\n")
 	} else {
 		// model is left as a placeholder rather than filled in: this text is written
 		// by a hook, which knows the harness and cannot know the model. The agent is
