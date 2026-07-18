@@ -98,10 +98,17 @@ prices for questions a teacher could have asked.
 
 ---
 
-## 2. The three roles
+## 2. The roles
 
 Each role is an agent given a role prompt, a payload ([§5](#5-the-payload)), and
 nothing else. Roles are *positions*, not agents: they rotate.
+
+There are three agents and four positions, because the last one is not a fourth
+mind. The Guide, having interrogated the spec, returns at the end of the round as
+the **Judge** ([§2.4](#24-the-judge)) — the one role that neither wrote the spec
+nor attacked it, and so the only one with no case to win. The Adversary files
+findings; the Judge rules on them. See [§2.4](#24-the-judge) for why the verdict
+had to be taken away from the Adversary.
 
 ### 2.1 The Planner
 
@@ -185,7 +192,8 @@ that is not solving anything does not need a large model or a reasoning budget.
 
 ### 2.3 The Adversary
 
-Attacks the revised spec, and decides whether the run ends.
+Attacks the revised spec. It no longer decides whether the run ends — it files a
+docket for the Judge ([§2.4](#24-the-judge)).
 
 > You are the Adversary. The specification in front of you is being presented as
 > finished. It is not, and your job is to prove it.
@@ -208,15 +216,76 @@ Attacks the revised spec, and decides whether the run ends.
 > finding. "If two runs share an output path, §4 does not say which claim wins, and
 > the second driver blocks forever" is.
 >
-> **PASS is real, and it is rare.** Issue it only if you genuinely cannot find a
-> flaw after trying to. Do not pass to be agreeable, do not pass because the spec
-> is *good* — good specs have flaws. But do not manufacture a finding either: an
-> invented flaw costs a full round to disprove, and a round is expensive. If you
-> have nothing, say so honestly.
+> **You do not decide whether the specification passes.** A separate Judge will
+> weigh your findings and rule. That frees you: you are not gambling a round on a
+> pass/fail call, so do not soften a real flaw to seem fair and do not decide for
+> yourself that something is too minor to mention. Report every flaw you can stand
+> behind with a concrete failure. Do not pad the list — an invented flaw, or a
+> matter of taste dressed up as a failure, wastes the Judge's turn and buries your
+> real findings. If you find nothing, return an empty list; the Judge reads that as
+> a finding of its own.
 
 Naming the flaw without designing the fix is the same rule as shift-left
 ([§3.4](#34-shift-left)), applied inside a single turn rather than across rounds.
 An Adversary that prescribes the fix has made the next Planner its typist.
+
+The Adversary used to issue the verdict itself, and that was a mistake we watched
+happen. A mind told to *attack* will always find something to say, and when the
+same mind then scores its own findings, everything it said becomes grounds to
+fail. Real runs failed on nitpicks — a hardening no one asked for, a scenario the
+intent had ruled out — and the Planner spent whole rounds chasing ghosts. Finding
+and judging are different jobs; the fix was to give them to different minds.
+
+### 2.4 The Judge
+
+Reads the Adversary's docket and rules: PASS if nothing on it would really hurt,
+FAIL with the survivors if something would. This is the only turn that ends a run.
+
+The Judge is the Guide's agent, resumed — the same mind that opened the round by
+asking *why*, returning to close it. That is not a cost-saving accident, it is the
+point: of the three agents in the round, the Guide is the only one that neither
+wrote the spec nor attacked it, so it is the only one that can weigh the teardown
+without a case to win. The Planner would defend its document; the Adversary would
+defend its findings; the Guide is disinterested in both.
+
+> You are the Judge. You did not write this specification, and you did not attack
+> it. You have read it once already — you are the same mind that questioned it as
+> the Guide — but you own neither the plan nor the teardown, and that is exactly
+> why the ruling is yours: you are the only role in the room with no case to win.
+>
+> A finding earns a FAIL only if **you** can name the concrete harm — the input or
+> state under which the spec, as written, produces a wrong or unacceptable outcome
+> against the intent. Walk the failure through the spec and see whether it really
+> fires. Uphold the ones that do.
+>
+> **Dismiss the rest, and be willing to.** An adversary under orders to attack will
+> always find something to say, and much of it is true of every spec ever written:
+> a matter of taste, a hardening no one asked for, a scenario the intent puts out
+> of scope. A finding is not real merely because it was filed or is technically
+> accurate. The question is never "is this imperfect"; it is "does this break, in a
+> way that matters here". Fitness for the intent is the bar, not perfection.
+>
+> [FAIL carries forward only the upheld findings, each restated with the harm you
+> confirmed — this list, not the Adversary's, is what the Planner answers next.
+> PASS if none survive.]
+
+The two errors the Judge can make are not symmetric in *where* they hurt, but both
+are named to it explicitly, because naming only one is how you bias the role. Wave
+through a real flaw and the pipeline ships a hole with a certificate on it — the
+failure the whole design exists to prevent. Uphold a nitpick and you block a spec
+that was ready and send the Planner chasing a ghost — the failure *this role*
+exists to prevent. There is deliberately no default verdict for a tie: a thumb on
+either scale brings back one of the two failures, so the Judge is told to reason
+each finding to a conclusion rather than fall back on a rule.
+
+Note the one asymmetry that *does* survive, and lives in the parser, not the
+prompt ([§5.1](#51-the-verdict-protocol)): an *unreadable* verdict is a FAIL. That
+is about parse ambiguity, not judgement — a garbled ruling is not a licence to
+ship — and it does not push the Judge's actual reasoning toward FAIL.
+
+Only the upheld findings travel onward. The nitpicks the Judge dismissed are gone:
+they never reach the next Planner, so no round is ever spent answering them. This
+is the mechanism that fixes the failure [§2.3](#23-the-adversary) describes.
 
 ---
 
@@ -239,7 +308,9 @@ is INTAKE, which the diagram does not have and [§3.1](#31-intake) argues for.
         │           REVISE ─────── Planner  (roles[0])
         │             │ revised spec
         │          TEARDOWN ────── Adversary(roles[2])
-        │             │ critique + verdict
+        │             │ critique (findings, no verdict)
+        │         ADJUDICATE ───── Judge    (roles[1], the Guide resumed)
+        │             │ verdict + upheld findings
         │             ▼
         │      ┌─────────────┐ PASS
         │      │  Verdict?   ├──────────────────► END: validated
@@ -293,24 +364,30 @@ in the payload that no agent wrote.
 | DRAFT | Planner | intent + seed (+ previous critique, if round > 1) | `spec.vN.md` |
 | INTERROGATE | Guide | intent + spec | `questions.vN.md` |
 | REVISE | Planner | intent + spec + questions | `spec.vN.md` (replaced) |
-| TEARDOWN | Adversary | intent + revised spec | `critique.vN.json` + verdict |
+| TEARDOWN | Adversary | intent + revised spec | `critique.vN.json` (findings, no verdict) |
+| ADJUDICATE | Judge | intent + revised spec + critique | verdict + upheld findings |
+
+ADJUDICATE is the Guide's agent resumed, not a fourth agent ([§2.4](#24-the-judge)).
 
 On round 1, DRAFT writes from nothing. On every later round DRAFT ingests the
-previous round's critique, which is the diagram's *Critique & New Map* edge — the
-teardown is not consumed by the agent that received it, but by whoever holds the
-pen next.
+previous round's critique — which is now the Judge's *upheld* findings, not the
+Adversary's raw docket, so a dismissed nitpick never reaches the pen. This is the
+diagram's *Critique & New Map* edge: the ruling is not consumed by the agent that
+made it, but by whoever holds the pen next.
 
-Each step is one agent turn. A round is four turns; three of them are the two
-expensive roles.
+Each step is one agent turn. A round is five turns; the Guide's agent takes two of
+them (INTERROGATE and ADJUDICATE) and the two expensive roles take the other
+three.
 
 ### 3.3 Termination
 
 Exactly two ways out, both from the diagram:
 
-- **PASS** — the Adversary found nothing. Output is labeled `validated`.
-- **max_rounds** — the round counter hit the ceiling with a live critique
+- **PASS** — the Judge upheld none of the Adversary's findings, whether because
+  there were none or because none would hurt. Output is labeled `validated`.
+- **max_rounds** — the round counter hit the ceiling with an upheld critique
   outstanding. Output is labeled **`unvalidated — max rounds reached`**, and the
-  final critique ships next to it.
+  Judge's surviving findings ship next to it.
 
 The label is not decoration. A spec that ran out of budget with known flaws in it
 is a *different artifact* from one that survived an attack, and a person who
@@ -342,10 +419,13 @@ critique being resolved by a mind that did not write it.
 
 Shift-left gets that, and gets two second-order properties nearly for free:
 
-- **The new Planner (B) is the old Guide.** It has read the spec closely enough to
-  interrogate it, and it arrives *informed but uncommitted* — it has spent a turn
-  asking about this document and zero turns defending it. It is the best-prepared
-  agent in the room that owes the current text nothing.
+- **The new Planner (B) is the old Guide — and the old Judge.** It has read the
+  spec closely enough to interrogate it, and it arrives *informed but uncommitted*:
+  it has spent its turns asking about this document and ruling on the attack, and
+  zero turns defending the text. If anything the Judge turn sharpens the handoff —
+  B has just decided, finding by finding, which of the Adversary's points are worth
+  fixing, and it is now the one that fixes them. It is still the best-prepared agent
+  in the room that owes the current words nothing.
 - **The new Guide (C) is the old Adversary.** It interrogates B's resolution of
   C's own critique — which is exactly the right question to be asking, asked by the
   one agent that knows precisely what it meant.
@@ -534,12 +614,12 @@ adapter decides what is *in* one.
 
 ### 5.1 The verdict protocol
 
-The Adversary's turn must produce a machine-readable answer to one question: does
-the run end?
+Two turns write into this protocol, and they write different halves of it.
+
+The **Adversary** produces the findings, and nothing that ends the run:
 
 ```jsonc
 {
-  "verdict": "FAIL",              // PASS | FAIL
   "findings": [
     {
       "category": "edge-case",    // logic | edge-case | structure | assumption | scope
@@ -552,31 +632,59 @@ the run end?
 }
 ```
 
+An empty `findings` array is the Adversary saying it found nothing. There is no
+`VERDICT` line in its output — issuing the verdict is not its job
+([§2.4](#24-the-judge)).
+
+The **Judge** produces the machine-readable answer to the one question that ends
+the run — does the spec pass? — in the *same* shape, carrying forward only the
+findings it upheld:
+
+```jsonc
+{
+  "verdict": "FAIL",              // PASS | FAIL
+  "findings": [ /* only the upheld ones, each restated with the confirmed harm */ ]
+}
+```
+
 Fenced as ```json, followed by a final line `VERDICT: PASS` or `VERDICT: FAIL`.
 Belt and braces on purpose: the sentinel is what the driver actually branches on
 (a trailing line is the one thing models reliably emit), and the JSON is what the
 next Planner reads. Where a host can enforce a schema natively, use it — codex
 takes `--output-schema <file>` ([§6](#6-harness-adapters)) — but never *rely* on
-it, because three of the four hosts cannot.
+it, because three of the four hosts cannot. The parser (`verdict.go`) is a single
+function: it reads a `VERDICT` line and a findings block wherever they appear, so
+it does not care that the Adversary and the Judge use overlapping shapes — it is
+only ever pointed at the Judge's turn.
 
-Parsing rules, and each is chosen for its failure direction:
+Parsing rules for the Judge's turn, and each is chosen for its failure direction:
 
 - **`verdict: FAIL` with zero findings → FAIL.** A round is spent. Annoying, not
-  wrong: the Adversary said the spec is not done.
+  wrong: the Judge said the spec is not done but named nothing — treated as a live
+  critique rather than a pass.
 - **`verdict: PASS` with findings → FAIL**, and the findings are kept. The two
   statements contradict; the run continues, because continuing costs a round and
   stopping costs the guarantee.
-- **Unparseable → one re-prompt** ("your last output was missing the verdict
-  block; reply with the JSON and the VERDICT line only"), on the same session so it
-  can see what it wrote. Still unparseable → **FAIL**, and the raw output is kept
-  as the critique body.
+- **Unparseable → one re-prompt** ("your last reply had no verdict; rule now,
+  reasoning then JSON then the VERDICT line"), on the same session so it can see
+  what it wrote. Still unparseable → **FAIL**, and the raw output is kept as the
+  critique body.
 
-Every ambiguity resolves to FAIL. This is deliberate and it is the single most
-important line in this document: **a false FAIL costs one round; a false PASS ships
-a spec that nothing attacked.** The entire system exists to produce the guarantee
-that PASS means something, and a parser that guesses PASS on malformed output
-would sell that guarantee for one round of compute. Fail-closed toward scrutiny,
-always.
+Every *parse* ambiguity resolves to FAIL. This is deliberate and it is the single
+most important line in this document: **a false FAIL costs one round; a false PASS
+ships a spec whose flaws nobody ruled on.** The entire system exists to produce the
+guarantee that PASS means something, and a parser that guesses PASS on malformed
+output would sell that guarantee for one round of compute. Fail-closed toward
+scrutiny, always.
+
+Note the seam between this rule and the Judge's prompt. The *parser* fails closed —
+a garbled ruling is never read as PASS. The *Judge* does not: it is told to clear
+nitpicks, because the whole reason the verdict moved off the Adversary
+([§2.4](#24-the-judge)) was that a fail-closed *judgement* rejected everything. The
+parser guards against unreadable output; the Judge guards against unready specs.
+Different failures, different turns, and it matters that they are not confused: bias
+the Judge toward FAIL and you have rebuilt the trigger-happy Adversary inside the
+role that was supposed to restrain it.
 
 ---
 

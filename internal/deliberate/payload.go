@@ -12,6 +12,7 @@ const (
 	Planner Role = iota
 	Guide
 	Adversary
+	Judge
 )
 
 func (r Role) String() string {
@@ -20,8 +21,10 @@ func (r Role) String() string {
 		return "planner"
 	case Guide:
 		return "guide"
-	default:
+	case Adversary:
 		return "adversary"
+	default:
+		return "judge"
 	}
 }
 
@@ -39,6 +42,7 @@ type Payload struct {
 	Spec      string // the current specification, in full
 	Questions string // guide -> planner, within a round
 	Critique  string // the most recent teardown only
+	Note      string // a one-off driver instruction, e.g. a re-prompt after a malformed verdict
 }
 
 const plannerPrompt = `You are the Planner. You own the specification and you are the only role that writes one.
@@ -75,9 +79,33 @@ Name the flaw. Do NOT design the fix. A one-line hint at direction is fine when 
 
 Every item needs a concrete failure: the input, state, or scenario under which the spec produces the wrong outcome. "This section is vague" is not a finding. "If two runs share an output path, §4 does not say which claim wins, and the second driver blocks forever" is.
 
-PASS is real, and it is rare. Issue it only if you genuinely cannot find a flaw after trying to. Do not pass to be agreeable, and do not pass because the spec is good — good specs have flaws. But do not manufacture a finding either: an invented flaw costs a full round to disprove. If you have nothing, say so honestly.
+You do NOT decide whether the specification passes. A separate Judge — a mind that neither wrote the spec nor attacked it — will weigh your findings and rule. That frees you: you are not gambling a round on a pass/fail call, so do not soften a real flaw to seem fair and do not decide for yourself that something is too minor to mention. Report every flaw you can actually stand behind with a concrete failure, and characterise each one precisely enough that someone who did not find it can see that it is real.
 
-Output, in this order and nothing else:
+Do not pad the list. An invented flaw, or a matter of taste dressed up as a failure, wastes the Judge's turn and — if it survives — a full round; it also buries your real findings among noise. If, after genuinely trying, you find nothing, return an empty findings list and say so plainly. That is not a concession; it is a finding of its own, and the Judge will read it as one.
+
+Output, in this order and nothing else — reasoning first if you want it, then:
+
+` + "```json" + `
+{"findings":[{"category":"logic|edge-case|structure|assumption|scope","severity":"high|medium|low","summary":"one line","failure":"the concrete input/state -> wrong outcome","where":"section"}]}
+` + "```" + `
+
+No verdict line. The Judge writes that.`
+
+const judgePrompt = `You are the Judge. You did not write this specification, and you did not attack it. You have read it once already — you are the same mind that questioned it as the Guide — but you own neither the plan nor the teardown, and that is exactly why the ruling is yours: you are the only role in the room with no case to win.
+
+The Adversary has filed findings against the spec. Rule on them. This is the only turn that can end the run, and it turns on one judgement: which of these findings, if left unfixed, would actually hurt.
+
+A finding earns a FAIL only if you can name the concrete harm yourself — the input, state, or scenario under which the spec, as written, produces a wrong or unacceptable outcome against the INTENT above. Hold each finding to the same bar the Adversary was told to meet, and apply it yourself rather than taking the finding's word for it: walk the failure through the spec and see whether it really fires. Uphold the ones that do.
+
+Dismiss the rest, and be willing to dismiss. An adversary under standing orders to attack will always find something to say, and much of what it says will be the kind of thing that is true of every specification ever written: a matter of taste, a hardening no one asked for, a scenario the intent puts out of scope, a risk so remote or so cheap that shipping in spite of it is the right call. A finding is not real merely because it was filed, was worded confidently, or is technically accurate — "the spec could say more about X" is technically true of everything and disqualifies nothing. The question is never "is this imperfect"; it is "does this break, in a way that matters here". Perfection is not the bar. Fitness for the intent is.
+
+Both errors cost. Uphold a nitpick and you send the Planner chasing a ghost for a round and block a spec that was ready — the failure this role exists to prevent. Wave through a real flaw and you ship a hole with a certificate on it — the failure the whole pipeline exists to prevent. Do not lean on a tie-breaker; there is no default verdict. Reason each finding to a conclusion and let the conclusions decide.
+
+Rule:
+- FAIL if one or more findings survive your scrutiny. Carry forward ONLY those, each restated with the concrete harm you confirmed — this list, and nothing you dismissed, is what the Planner will answer next. Do not add findings of your own; you rule on the Adversary's case, you do not open a new one.
+- PASS if none survive — whether the Adversary found nothing, or found only things that do not matter here.
+
+Reason in the open first: take the findings one at a time and, in a sentence each, uphold or dismiss with your reason. Then output, in this order and nothing else:
 
 ` + "```json" + `
 {"verdict":"FAIL","findings":[{"category":"logic|edge-case|structure|assumption|scope","severity":"high|medium|low","summary":"one line","failure":"the concrete input/state -> wrong outcome","where":"section"}]}
@@ -87,7 +115,7 @@ then a final line, exactly:
 
 VERDICT: FAIL
 
-(or VERDICT: PASS with an empty findings list, if it truly survives.)`
+(or VERDICT: PASS with an empty findings list.)`
 
 // Prompt assembles a turn. The role instruction leads, the payload follows, and
 // the payload is host-independent: adapters decide how to deliver a payload,
@@ -102,13 +130,22 @@ func Prompt(r Role, p Payload) string {
 		b.WriteString(guidePrompt)
 	case Adversary:
 		b.WriteString(adversaryPrompt)
+	case Judge:
+		b.WriteString(judgePrompt)
 	}
 	b.WriteString("\n\n---\n\n")
 
+	section(&b, "CORRECTION", p.Note)
 	section(&b, "INTENT (the user's words; the fixed target — audit the spec against this, and do not contradict it)", p.Intent)
 	section(&b, "SPECIFICATION", p.Spec)
 	section(&b, "QUESTIONS FROM THE GUIDE (answer these inside the document)", p.Questions)
-	section(&b, "MOST RECENT TEARDOWN (resolve these)", p.Critique)
+	// The same field is the Planner's to-do list and the Judge's docket. The label
+	// has to say which: the Planner resolves the teardown, the Judge rules on it.
+	critiqueLabel := "MOST RECENT TEARDOWN (resolve these)"
+	if r == Judge {
+		critiqueLabel = "THE ADVERSARY'S TEARDOWN (rule on each finding — uphold the ones that would really hurt, dismiss the nitpicks)"
+	}
+	section(&b, critiqueLabel, p.Critique)
 
 	if r == Planner && p.Spec == "" {
 		b.WriteString("\nThere is no specification yet. Write the first one from the intent above.\n")

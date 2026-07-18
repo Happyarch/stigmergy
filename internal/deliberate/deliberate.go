@@ -1,8 +1,10 @@
 // Package deliberate runs a specification through three agents that never talk
 // to each other.
 //
-// One drafts, one interrogates, one attacks, and on every failed round they
-// shift left so the mind resolving a teardown is never the mind that wrote it.
+// One drafts, one interrogates, one attacks — and then the interrogator returns
+// as a neutral Judge to rule on the attack, because an adversary left to score its
+// own findings fails almost anything. On every failed round they shift left so the
+// mind resolving a teardown is never the mind that wrote it.
 // They coordinate entirely through traces left in a shared environment — a spec,
 // a question list, a critique — which is what the word stigmergy means and why
 // this lives here.
@@ -90,6 +92,18 @@ func Run(ctx context.Context, cfg Config, log io.Writer) (Result, error) {
 	for round := 1; round <= cfg.MaxRounds; round++ {
 		fmt.Fprintf(log, "\n── round %d/%d ──\n", round, cfg.MaxRounds)
 
+		// A stalled or crashed turn must not throw away the round's work. p.Spec
+		// always holds the last spec COMPLETED at a handoff: the previous round's
+		// revision if this round's draft never returned, this round's draft if the
+		// revision failed, the revision if the teardown or judgement failed. fail
+		// hands that back — with the error — so the CLI can preserve it instead of
+		// writing nothing. The per-turn transcripts are already on disk under
+		// .git/deliberate/<run-id>/ regardless; this is about the promoted spec.
+		// It is empty only when the very first draft never produced one.
+		fail := func(err error) (Result, error) {
+			return Result{Spec: p.Spec, Validated: false, Rounds: round, Critique: last}, err
+		}
+
 		// role(i) = agents[(rotation+i) % n]. The array is never reordered:
 		// shift-left is an offset. Reordering it would mean moving each agent's
 		// session in lockstep, and the first off-by-one would hand one agent's
@@ -101,33 +115,48 @@ func Run(ctx context.Context, cfg Config, log io.Writer) (Result, error) {
 
 		spec, err := turn(ctx, cfg, adapters, planner, Planner, p, log)
 		if err != nil {
-			return Result{}, err
+			return fail(err)
 		}
 		p.Spec = spec
 		p.Critique = "" // consumed by the draft; the spec now contains its resolution
 
 		questions, err := turn(ctx, cfg, adapters, guide, Guide, p, log)
 		if err != nil {
-			return Result{}, err
+			return fail(err)
 		}
 		p.Questions = questions
 
 		revised, err := turn(ctx, cfg, adapters, planner, Planner, p, log)
 		if err != nil {
-			return Result{}, err
+			return fail(err)
 		}
 		p.Spec = revised
 		p.Questions = ""
 
-		v, err := teardown(ctx, cfg, adapters, adversary, p, log)
+		// The Adversary attacks but no longer rules. Left to score its own
+		// findings it fails almost anything: told to attack, it always finds
+		// something to say, and a self-issued verdict turns every nitpick into a
+		// wasted round. So it hands a docket to a Judge.
+		critique, err := turn(ctx, cfg, adapters, adversary, Adversary, p, log)
 		if err != nil {
-			return Result{}, err
+			return fail(err)
+		}
+		p.Critique = critique
+
+		// The Judge is the Guide's agent, resumed. It wrote nothing and attacked
+		// nothing — the one mind in the round with no case to win — so it can weigh
+		// the teardown against the spec and rule. Its upheld subset, not the
+		// Adversary's raw critique, becomes the next Planner's to-do list: the
+		// dismissed nitpicks simply stop existing.
+		v, err := adjudicate(ctx, cfg, adapters, guide, p, log)
+		if err != nil {
+			return fail(err)
 		}
 		last = v
 		p.Critique = v.Raw
 
 		if v.Pass {
-			fmt.Fprintf(log, "\nPASS — the adversary found nothing.\n")
+			fmt.Fprintf(log, "\nPASS — the judge upheld none of the adversary's findings.\n")
 			return Result{Spec: p.Spec, Validated: true, Rounds: round}, nil
 		}
 		fmt.Fprintf(log, "FAIL — %d finding(s)\n", len(v.Findings))
@@ -161,14 +190,17 @@ func turn(ctx context.Context, cfg Config, adapters []Adapter, a *Agent, r Role,
 	return out, nil
 }
 
-// teardown is the Adversary's turn plus the only parse that can end a run.
+// adjudicate is the Judge's turn plus the only parse that can end a run.
 //
+// The Judge is the Guide's agent resumed (p already carries the Adversary's
+// critique as p.Critique), now ruling on the teardown rather than resolving it.
 // A malformed verdict gets exactly one re-prompt, on the same session so the
-// agent can see what it wrote, and then the round counts as FAIL. Every
-// ambiguity resolves toward more scrutiny: a false FAIL costs one round, a false
-// PASS ships a spec that nothing attacked.
-func teardown(ctx context.Context, cfg Config, adapters []Adapter, a *Agent, p Payload, log io.Writer) (Verdict, error) {
-	out, err := turn(ctx, cfg, adapters, a, Adversary, p, log)
+// agent can see what it wrote, and then the round counts as FAIL. Every ambiguity
+// in the parse resolves toward more scrutiny: a false FAIL costs one round, a
+// false PASS ships a spec whose flaws nobody ruled on. That the Judge is meant to
+// clear nitpicks lives in its prompt, not here — the parser must never guess PASS.
+func adjudicate(ctx context.Context, cfg Config, adapters []Adapter, a *Agent, p Payload, log io.Writer) (Verdict, error) {
+	out, err := turn(ctx, cfg, adapters, a, Judge, p, log)
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -177,13 +209,11 @@ func teardown(ctx context.Context, cfg Config, adapters []Adapter, a *Agent, p P
 		return v, nil
 	}
 
-	fmt.Fprintf(log, "  (no verdict line — re-prompting once)\n")
-	retry, err := turn(ctx, cfg, adapters, a, Adversary, Payload{
-		Intent: p.Intent,
-		Spec:   p.Spec,
-		Critique: "Your last output had no verdict. Reply with ONLY the fenced json block " +
-			"and a final line reading exactly `VERDICT: PASS` or `VERDICT: FAIL`.",
-	}, log)
+	fmt.Fprintf(log, "  (no verdict line — re-prompting the judge once)\n")
+	reprompt := p
+	reprompt.Note = "Your last reply had no verdict. Rule now: reasoning first, then the fenced json block, " +
+		"and a final line reading exactly `VERDICT: PASS` or `VERDICT: FAIL`."
+	retry, err := turn(ctx, cfg, adapters, a, Judge, reprompt, log)
 	if err != nil {
 		return Verdict{}, err
 	}

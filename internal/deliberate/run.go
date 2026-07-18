@@ -11,7 +11,14 @@ import (
 
 // DefaultTimeout bounds one turn. A worker that never returns must not hold up
 // the run forever.
-const DefaultTimeout = 10 * time.Minute
+//
+// This is a blunt wall-clock ceiling, not an idle timeout: output is buffered and
+// only read when the process exits, so a turn that is productively churning looks
+// the same as one that is hung. 90 minutes is deliberately generous — a high-effort
+// agentic DRAFT grounding itself in a large repo can run a long time, and killing
+// live work costs a whole round. The real fix is an inactivity timeout on the
+// host's event stream; until then, err toward letting a slow turn finish.
+const DefaultTimeout = 90 * time.Minute
 
 // runWrapped executes one host invocation inside bwrap and returns its stdout.
 //

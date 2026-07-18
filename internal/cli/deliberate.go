@@ -27,8 +27,8 @@ func newDeliberateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deliberate",
 		Short: "Put a specification through three agents that try to break it",
-		Long: "Draft, interrogate, revise, tear down — then rotate the agents left and do it again\n" +
-			"until the adversary passes or the rounds run out.\n\n" +
+		Long: "Draft, interrogate, revise, tear down, judge — then rotate the agents left and do it\n" +
+			"again until the judge upholds nothing or the rounds run out.\n\n" +
 			"Each agent works at the real repository path, confined by bwrap to an overlay whose\n" +
 			"writes land in RAM and die with the process. Your working tree is never touched and\n" +
 			"does not need to be clean.\n\n" +
@@ -90,6 +90,26 @@ func newDeliberateCmd() *cobra.Command {
 				RunID:     runID,
 			}, cmd.ErrOrStderr())
 			if err != nil {
+				// A turn stalled or crashed. Do not let one dead agent wipe the run:
+				// if any spec was completed at a handoff before the failure, write it
+				// to --out under an INTERRUPTED header so the round's work survives
+				// and can be picked up by hand. res.Spec is empty only when the very
+				// first draft never produced one — nothing to save, so nothing is.
+				if res.Spec != "" {
+					header := fmt.Sprintf(
+						"<!-- deliberated: INTERRUPTED — a turn failed in round %d.\n"+
+							"     error: %v\n"+
+							"     This is the last spec completed at an agent handoff; it was NOT validated. -->\n\n",
+						res.Rounds, err)
+					if mkErr := os.MkdirAll(filepath.Dir(outPath), 0o755); mkErr == nil {
+						if wErr := os.WriteFile(outPath, []byte(header+res.Spec), 0o644); wErr == nil {
+							fmt.Fprintf(cmd.OutOrStdout(),
+								"\n%s\nINTERRUPTED in round %d — the last completed spec was preserved above.\n"+
+									"per-turn transcripts: .git/deliberate/%s\n",
+								outPath, res.Rounds, runID)
+						}
+					}
+				}
 				return err
 			}
 
@@ -212,12 +232,13 @@ func parseAgents(specs []string) ([]deliberate.Agent, error) {
 
 // preview says what this is about to cost before a single token is spent.
 //
-// A round is four agent turns and the default ceiling is three rounds, so the
-// worst case is twelve turns across three harnesses on a repository. That is not
-// a thing to discover afterwards.
+// A round is five agent turns (the Guide's agent runs twice — once to interrogate,
+// once to judge) and the default ceiling is three rounds, so the worst case is
+// fifteen turns across three harnesses on a repository. That is not a thing to
+// discover afterwards.
 func preview(w interface{ Write([]byte) (int, error) }, agents []deliberate.Agent, maxRounds int, out, runID string, yes bool) error {
 	fmt.Fprintf(w, "stigmergy deliberate — %d agent(s), up to %d round(s)\n\n", len(agents), maxRounds)
-	fmt.Fprintf(w, "  planner/guide/adversary rotate over:\n")
+	fmt.Fprintf(w, "  planner/guide/adversary rotate over (the guide's agent also judges):\n")
 	for i, a := range agents {
 		effort := a.Effort
 		if effort == "" {
@@ -227,7 +248,7 @@ func preview(w interface{ Write([]byte) (int, error) }, agents []deliberate.Agen
 	}
 	fmt.Fprintf(w, "\n  each agent works at the real repository path, in a bwrap overlay whose\n")
 	fmt.Fprintf(w, "  writes go nowhere. your working tree is not touched and need not be clean.\n\n")
-	fmt.Fprintf(w, "  up to %d agent turns. output -> %s\n  run: .git/deliberate/%s\n", maxRounds*4, out, runID)
+	fmt.Fprintf(w, "  up to %d agent turns. output -> %s\n  run: .git/deliberate/%s\n", maxRounds*5, out, runID)
 
 	if len(agents) < 3 {
 		fmt.Fprintf(w, "\n  WARNING: fewer than 3 agents. Rotation still separates the roles, but with\n"+
