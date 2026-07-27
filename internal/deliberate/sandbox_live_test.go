@@ -139,3 +139,69 @@ func TestALargeBriefSurvivesTheBoundary(t *testing.T) {
 		t.Errorf("brief arrived as %s bytes, want 320000", got)
 	}
 }
+
+// Everything outside the declared repositories, $HOME and the state dirs is
+// READ-ONLY, and that is what the rest of the confinement rests on.
+//
+// The overlays make specific places writable-but-ephemeral. They say nothing
+// about anywhere else — the property that a worker cannot scribble on the rest
+// of the machine comes from one line, `--ro-bind / /`, laid down before them as
+// the base. Nothing asserted it: remove that line and every other sandbox test
+// still passes, while a worker gains write access to the whole filesystem.
+//
+// /etc is used because it is guaranteed to exist, is outside every overlay, and
+// is nowhere near anything this project owns. The probe path is checked on the
+// host afterwards and the test fails loudly if it ever appears.
+func TestTheFilesystemOutsideTheOverlaysIsReadOnly(t *testing.T) {
+	_, run := liveSandbox(t)
+	const probe = "/etc/stigmergy-sandbox-probe"
+
+	out := run("", "touch "+probe+" 2>&1; echo EXIT=$?")
+	if !strings.Contains(out, "EXIT=1") {
+		t.Errorf("touching %s inside the sandbox did not fail: %q", probe, out)
+	}
+	if !strings.Contains(strings.ToLower(out), "read-only") {
+		t.Errorf("the failure was not a read-only filesystem: %q", out)
+	}
+	if _, err := os.Stat(probe); err == nil {
+		os.Remove(probe)
+		t.Fatalf("a worker created %s on the real filesystem — the read-only root is gone", probe)
+	}
+}
+
+// Reading outside is allowed, and that is the intended trade: a worker needs its
+// toolchain, its libraries and its interpreters, all of which live out there.
+// Confinement here is about what a worker can CHANGE, not what it can see.
+func TestReadingOutsideTheOverlaysStillWorks(t *testing.T) {
+	_, run := liveSandbox(t)
+	if got := run("", "test -r /etc/hostname && echo readable"); got != "readable" {
+		t.Errorf("a worker could not read /etc: %q — its tools would stop working", got)
+	}
+}
+
+// The worker gets a FRESH /tmp, so nothing the host left there is visible.
+//
+// Found by writing the test above wrongly: the first version put its fixture in
+// t.TempDir(), which is under /tmp, and the file simply was not there inside the
+// sandbox. That is a stronger property than the one being tested and it was not
+// asserted anywhere — worth pinning, because the payload is bind-mounted at
+// /tmp/stigmergy-payload.md and therefore depends on this tmpfs being laid down
+// FIRST. Reorder those two and the brief disappears.
+func TestTheWorkerGetsAFreshTmp(t *testing.T) {
+	_, run := liveSandbox(t)
+
+	hostFile := filepath.Join(os.TempDir(), "stigmergy-host-tmp-probe.txt")
+	if err := os.WriteFile(hostFile, []byte("HOST"), 0o600); err != nil {
+		t.Skipf("cannot write to the host /tmp: %v", err)
+	}
+	defer os.Remove(hostFile)
+
+	if got := run("", "cat "+hostFile+" 2>&1 || true"); strings.Contains(got, "HOST") {
+		t.Errorf("the host's /tmp is visible to the worker: %q", got)
+	}
+	// And the payload still arrives, which is the thing that depends on the
+	// tmpfs going down before the bind.
+	if got := run("the brief", "cat "+SandboxPayloadPath); got != "the brief" {
+		t.Errorf("the brief did not survive the /tmp tmpfs: %q", got)
+	}
+}
