@@ -185,3 +185,31 @@ func TestRemovingARepositoryReleasesItsClaims(t *testing.T) {
 		t.Errorf("claims survived their repository's removal: %+v", active)
 	}
 }
+
+// The project name is printed for every project on the machine by
+// `doctor --all`, and stored as the registry label. It is agent- or user-typed
+// text rendered inline in a list, which is the same shape as a claim reason and
+// gets the same rules.
+func TestProjectNameIsValidated(t *testing.T) {
+	db := testProject(t)
+
+	for name, value := range map[string]string{
+		"an ANSI escape":  "\x1b[2J\x1b[Hcleared",
+		"a line break":    "first line\nsecond line",
+		"NUL":             "before\x00after",
+		"a bidi override": "the project is \u202esuoicilam",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := db.SetMeta(MetaNameKey, value); err == nil {
+				t.Errorf("accepted %s — it renders in every doctor --all listing", name)
+			}
+		})
+	}
+
+	if err := db.SetMeta(MetaNameKey, "  the naviamp project  "); err != nil {
+		t.Fatalf("an ordinary name was refused: %v", err)
+	}
+	if got := db.Name(); got != "the naviamp project" {
+		t.Errorf("name = %q, want it trimmed", got)
+	}
+}

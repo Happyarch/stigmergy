@@ -161,7 +161,17 @@ func (d *DB) EnsureSelfRepo(repoID, commonDir, worktree string) error {
 const MetaNameKey = "project_name"
 
 // SetMeta records a project-level fact.
+//
+// The value goes through the same text rules as anything else an agent or a user
+// types, because it comes back out the same way: the project name is what
+// `doctor --all` prints for every project on the machine, and what the registry
+// stores as a label. It is one line, rendered inline, in a list — the same shape
+// as a claim reason, and it gets the same treatment.
 func (d *DB) SetMeta(key, value string) error {
+	value = NormalizeText(value)
+	if err := ValidateLine("value", value, MaxLineLength); err != nil {
+		return err
+	}
 	_, err := d.Exec(
 		`INSERT INTO meta(key, value) VALUES(?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
