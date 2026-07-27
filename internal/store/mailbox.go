@@ -75,11 +75,22 @@ type SendRequest struct {
 // and the sender learns the blocking claim's owner is gone and its claim with
 // it.
 func (d *DB) SendMessage(req SendRequest) (*Message, error) {
+	req.Subject, req.Body = NormalizeText(req.Subject), NormalizeText(req.Body)
 	if req.ToRoot == "" || req.Subject == "" || req.Body == "" {
 		return nil, serr.E(serr.InvalidInput, "to_root, subject and body are all required")
 	}
 	if req.ToRoot == req.FromRoot {
 		return nil, serr.E(serr.InvalidInput, "you cannot send mail to yourself")
+	}
+	// Mail is the highest-value target for anything hiding in text: hooks put it
+	// in front of the recipient at the start of a turn, so whatever is in here is
+	// rendered into another agent's terminal and context without either of them
+	// choosing to look at it.
+	if err := ValidateLine("subject", req.Subject, MaxLineLength); err != nil {
+		return nil, err
+	}
+	if err := ValidateBlock("body", req.Body); err != nil {
+		return nil, err
 	}
 
 	tx, err := d.Begin()

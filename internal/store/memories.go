@@ -441,10 +441,10 @@ func (w MemoryWrite) validate() error {
 	// A memory is written once and read by everyone afterwards, so the moment to
 	// refuse unreadable text is here — while the agent that produced it is still
 	// holding the original and can send it again correctly.
-	if err := ValidateText("description", w.Description, true); err != nil {
+	if err := ValidateLine("description", w.Description, MaxDescriptionLength); err != nil {
 		return err
 	}
-	if err := ValidateText("body", w.Body, false); err != nil {
+	if err := ValidateBlock("body", w.Body); err != nil {
 		return err
 	}
 	if w.UpdatedBy == "" {

@@ -36,31 +36,56 @@ import (
 // the first group to catch the second.
 const DoubleEscapeMinLength = 200
 
-// MaxDescriptionLength bounds the one-line summary. It is what every listing
-// shows, so a description that runs to a paragraph pushes everything else off
-// the screen — the cost lands on readers who did not write it.
-const MaxDescriptionLength = 500
+// MaxLineLength bounds any single-line agent-authored field: a memory
+// description, a claim reason, a mail subject. Each of them is rendered inline
+// somewhere another agent is reading — a conflict message, a roster row, an
+// index — so a paragraph in one costs every reader who did not write it.
+const MaxLineLength = 500
+
+// MaxDescriptionLength is the memory description's share of that limit, named
+// separately because it is the one an agent meets most often.
+const MaxDescriptionLength = MaxLineLength
 
 // NormalizeText cleans up the unambiguous cases, in place of complaining.
+//
+// It runs to a FIXED POINT rather than making one pass, and that is not
+// defensive coding \u2014 a single pass is provably wrong here. Stripping the BOM
+// before trimming leaves the BOM in " \ufeffx", because it is not leading until
+// the space has gone; trimming first leaves it in "\ufeff x" for the mirror
+// reason; and either order leaves the second BOM in "\ufeff\ufeff". Each of
+// those normalises to something that would normalise again to something else,
+// so a caller validating what it holds and a store writing what it was given
+// could disagree about the same string. A fuzz test found it in fifteen seconds.
+//
+// Termination is not in doubt: every step can only remove bytes, and the loop
+// exits the moment one changes nothing.
 func NormalizeText(s string) string {
-	// Written as an escape, never as the character. A literal BOM in this file
-	// is a compile error, and a literal bidi override below would be invisible
-	// in the very source that rejects it.
-	s = strings.TrimPrefix(s, "\ufeff")
-	// CRLF and lone CR both mean "line break" and nothing else. Left alone they
-	// survive into every rendering as stray blank lines or ^M.
-	if strings.ContainsRune(s, '\r') {
-		s = strings.ReplaceAll(s, "\r\n", "\n")
-		s = strings.ReplaceAll(s, "\r", "\n")
+	for {
+		before := s
+		// Written as an escape, never as the character: a literal BOM in this
+		// file is a compile error, and the literal bidi overrides rejected below
+		// would be invisible in the very source that rejects them.
+		s = strings.TrimLeft(s, "\ufeff")
+		// CRLF and lone CR both mean "line break" and nothing else. Left alone
+		// they survive into every rendering as stray blank lines or ^M.
+		if strings.ContainsRune(s, '\r') {
+			s = strings.ReplaceAll(s, "\r\n", "\n")
+			s = strings.ReplaceAll(s, "\r", "\n")
+		}
+		s = strings.TrimSpace(s)
+		if s == before {
+			return s
+		}
 	}
-	return strings.TrimSpace(s)
 }
 
-// ValidateText rejects text that cannot be stored honestly.
+// ValidateBlock checks free-form multi-line text: a memory body, a mail body, a
+// verification reason. Newlines and tabs are expected; everything in the rules
+// above still applies.
 //
-// field names the input in the error, because an agent that gets this back has
-// to know which of the two it needs to fix.
-func ValidateText(field, s string, oneLine bool) error {
+// field names the input in the error, because an agent that gets one back has to
+// know which of several it needs to fix.
+func ValidateBlock(field, s string) error {
 	if !utf8.ValidString(s) {
 		return serr.E(serr.InvalidInput,
 			"%s is not valid UTF-8. Send text, not raw bytes: whatever produced this has mangled the encoding, and the damage is already in the string", field)
@@ -71,18 +96,30 @@ func ValidateText(field, s string, oneLine bool) error {
 	if err := rejectBidiOverrides(field, s); err != nil {
 		return err
 	}
+	return rejectDoubleEscaped(field, s)
+}
 
-	if oneLine {
-		if i := strings.IndexAny(s, "\n"); i >= 0 {
+// ValidateLine checks text that has to stay on one line, because it is rendered
+// inline somewhere: a conflict message, a roster row, an index.
+//
+// maxRunes of zero or less means no length limit, which is for the fields that
+// are paths rather than prose — a long path is awkward, not wrong, and refusing
+// one would lock an agent out of its own worktree over cosmetics.
+func ValidateLine(field, s string, maxRunes int) error {
+	if err := ValidateBlock(field, s); err != nil {
+		return err
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return serr.E(serr.InvalidInput,
+			"%s must be a single line, but it has a line break at character %d. It is rendered inline where other agents read it, so a second line breaks whatever is around it", field, i+1)
+	}
+	if maxRunes > 0 {
+		if n := utf8.RuneCountInString(s); n > maxRunes {
 			return serr.E(serr.InvalidInput,
-				"%s must be a single line, but it has a line break at character %d. It is the one thing every listing shows; put the detail in the body", field, i+1)
-		}
-		if n := utf8.RuneCountInString(s); n > MaxDescriptionLength {
-			return serr.E(serr.InvalidInput,
-				"%s is %d characters; the limit is %d. It is a one-line summary, not the memory itself", field, n, MaxDescriptionLength)
+				"%s is %d characters; the limit is %d. It is a one-line summary, not the content itself", field, n, maxRunes)
 		}
 	}
-	return rejectDoubleEscaped(field, s)
+	return nil
 }
 
 // rejectControlChars refuses anything that is neither text nor a line break.
@@ -186,11 +223,11 @@ func (d *DB) UnreadableMemories() ([]TextProblem, error) {
 		if err := rows.Scan(&key, &desc, &body); err != nil {
 			return nil, serr.Internalf(err, "failed to read a memory")
 		}
-		if err := ValidateText("description", desc, true); err != nil {
+		if err := ValidateLine("description", desc, MaxDescriptionLength); err != nil {
 			out = append(out, TextProblem{Key: key, Reason: message(err)})
 			continue
 		}
-		if err := ValidateText("body", body, false); err != nil {
+		if err := ValidateBlock("body", body); err != nil {
 			out = append(out, TextProblem{Key: key, Reason: message(err)})
 		}
 	}

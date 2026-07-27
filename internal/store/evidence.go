@@ -485,8 +485,12 @@ func validatePattern(p EvidencePath) error {
 	if strings.TrimSpace(p.Pattern) == "" {
 		return serr.E(serr.InvalidInput, "a path pattern must not be empty")
 	}
-	if strings.ContainsRune(p.Pattern, 0) {
-		return serr.E(serr.InvalidInput, "a path pattern must not contain a NUL byte")
+	// A pattern is echoed back in every evidence result, so it lands in the same
+	// terminals as everything else here. It also becomes a git pathspec on an
+	// argv, where a control character is a different kind of problem again. This
+	// used to check only for NUL.
+	if err := ValidateLine("path pattern", p.Pattern, 0); err != nil {
+		return err
 	}
 	if strings.HasPrefix(p.Pattern, "/") {
 		return serr.E(serr.InvalidInput,

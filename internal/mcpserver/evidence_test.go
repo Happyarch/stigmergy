@@ -324,3 +324,42 @@ func TestEvidenceRequiresRegistration(t *testing.T) {
 		t.Fatalf("code = %q, want wrong_state", code)
 	}
 }
+
+// The sanitation rules live in the store, but agents meet them through the
+// protocol — so the refusal has to arrive as a proper tool error with a code
+// they can branch on, not as a transport failure.
+func TestHostileTextIsRefusedThroughTheProtocol(t *testing.T) {
+	h := evidenceHarness(t)
+	other := newHarnessIn(t, h.worktree, filepath.Join(t.TempDir(), "global.sqlite3"))
+	other.open()
+	otherRoot := other.register()
+
+	const ansi = "\x1b[2J\x1b[H a cleared screen"
+	cases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"memory_write", map[string]any{
+			"scope": "project", "key": "hostile", "type": "project",
+			"description": "d", "body": ansi,
+		}},
+		{"memory_write", map[string]any{
+			"scope": "project", "key": "hostile", "type": "project",
+			"description": ansi, "body": "b",
+		}},
+		{"mailbox_send", map[string]any{
+			"to_root": otherRoot, "subject": ansi, "body": "b",
+		}},
+		{"mailbox_send", map[string]any{
+			"to_root": otherRoot, "subject": "s", "body": ansi,
+		}},
+		{"claim_acquire", map[string]any{
+			"scope_path": "some/file.go", "reason": ansi,
+		}},
+	}
+	for _, tc := range cases {
+		if code := h.errCode(tc.tool, tc.args); code != "invalid_input" {
+			t.Errorf("%s accepted an ANSI escape (code %q)", tc.tool, code)
+		}
+	}
+}

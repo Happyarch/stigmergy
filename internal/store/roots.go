@@ -155,6 +155,25 @@ func (r Registration) validate() error {
 	if !filepath.IsAbs(r.Worktree) {
 		return serr.E(serr.InvalidInput, "worktree must be an absolute path, got %q", r.Worktree)
 	}
+	// Every one of these is rendered into the roster and into the conflict
+	// message of any agent this root blocks, so they carry text into other
+	// agents' terminals exactly as a claim reason does. The model string stays
+	// otherwise unvalidated on purpose — only the agent knows what is behind its
+	// harness, and a wrong answer costs a line of roster output — but "whatever
+	// the agent says" still has to be printable.
+	for _, f := range []struct {
+		name, value string
+		max         int
+	}{
+		{"worktree", r.Worktree, 0},
+		{"branch", r.Branch, MaxLineLength},
+		{"session_label", r.SessionLabel, MaxLineLength},
+		{"model", r.Model, MaxLineLength},
+	} {
+		if err := ValidateLine(f.name, f.value, f.max); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -230,8 +230,24 @@ func NormalizeTTL(seconds int) (time.Duration, error) {
 // Overlap check and insert share one immediate transaction: two agents racing
 // for the same file must not both come away believing they hold it.
 func (d *DB) AcquireClaim(req ClaimRequest) (*Claim, error) {
+	req.Reason = NormalizeText(req.Reason)
 	if req.Reason == "" {
 		return nil, serr.E(serr.InvalidInput, "reason must not be empty: other agents see it when your claim blocks them")
+	}
+	// The reason is quoted back inside the conflict message of every agent this
+	// claim blocks, and again in the roster and in doctor's output. It reaches
+	// more terminals than almost anything else an agent writes.
+	if err := ValidateLine("reason", req.Reason, MaxLineLength); err != nil {
+		return nil, err
+	}
+	// Worktree and branch are echoed alongside it in the same places. No length
+	// limit on the path: a long worktree is awkward, not wrong, and refusing one
+	// would lock an agent out of its own checkout over cosmetics.
+	if err := ValidateLine("worktree", req.Worktree, 0); err != nil {
+		return nil, err
+	}
+	if err := ValidateLine("branch", req.Branch, MaxLineLength); err != nil {
+		return nil, err
 	}
 	ttl, err := NormalizeTTL(req.TTLSeconds)
 	if err != nil {

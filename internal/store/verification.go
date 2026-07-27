@@ -74,6 +74,13 @@ func (d *DB) RecordVerification(r VerificationRecord) (*Verification, error) {
 	if r.Actor == "" {
 		return nil, serr.E(serr.InvalidInput, "actor must be set")
 	}
+	// The reason is the part of a verification anyone reads later — it is what
+	// makes the record worth having — so it goes through the same rules as a
+	// memory body. Multi-line, because explaining what you checked often is.
+	r.Reason = NormalizeText(r.Reason)
+	if err := ValidateBlock("reason", r.Reason); err != nil {
+		return nil, err
+	}
 
 	tx, err := d.Begin()
 	if err != nil {
