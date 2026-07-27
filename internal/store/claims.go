@@ -352,13 +352,51 @@ func (d *DB) RenewClaim(id int64, rootID string, ttlSeconds int) (*Claim, error)
 	}
 	defer tx.Rollback()
 
-	owner, err := claimOwner(tx, id)
+	// Refresh the renewing root first, inside this transaction, for the same
+	// reason AcquireClaim does: heartbeat() releases a lapsed root's claims, and
+	// a caller that heartbeats afterwards would be told its claim was renewed and
+	// then have it swept away a moment later. Sweeping first turns that into the
+	// honest answer — the claim is gone, ErrNoClaim, re-acquire.
+	if err := heartbeat(tx, rootID); err != nil && !errors.Is(err, ErrNoRoot) {
+		return nil, err
+	}
+
+	cur, err := claimForRenewal(tx, id)
 	if err != nil {
 		return nil, err
 	}
-	if owner != rootID {
-		return nil, notOwner(id, owner, "renew")
+	if cur.RootID != rootID {
+		return nil, notOwner(id, cur.RootID, "renew")
 	}
+
+	// An EXPIRED claim has already stopped binding. Other agents were told the
+	// path was free and one of them may be editing it right now, so extending the
+	// expiry without looking would hand the same path to two roots — the exact
+	// resurrection the lapse sweep exists to prevent, one function over.
+	//
+	// Re-running the overlap check rather than refusing outright is the friendlier
+	// half of that: if nobody took the path, renewal is harmless and the agent
+	// carries on. If somebody did, they are named, exactly as an acquire would
+	// name them.
+	if cur.ExpiresAt <= Now() {
+		active, err := activeIn(tx, rootID)
+		if err != nil {
+			return nil, err
+		}
+		want := RepoScope{Repo: cur.RepoID, Scope: claims.Scope{Path: cur.ScopePath, Recursive: cur.Recursive}}
+		for _, c := range active {
+			if c.RootID == rootID || !overlaps(c.RepoScope(), want) {
+				continue
+			}
+			return nil, serr.E(serr.ClaimConflict,
+				"claim %d expired at %s and %s has since taken %s — %s (worktree %s, reason: %q). "+
+					"It stopped binding when it expired, so renewing it now would give the same path to two agents. "+
+					"Negotiate with mailbox_send(to_root=%q), or work elsewhere.",
+				id, cur.ExpiresAt, c.RootID, c.Qualified(), c.OwnerLiveness, c.Worktree, c.Reason, c.RootID).
+				With("conflict", c)
+		}
+	}
+
 	expires := Stamp(NowTime().Add(ttl))
 	res, err := tx.Exec(
 		`UPDATE claims SET expires_at = ? WHERE id = ? AND released_at IS NULL`, expires, id)
@@ -406,6 +444,26 @@ func (d *DB) ReleaseClaim(id int64, rootID string) error {
 		return serr.Internalf(err, "failed to commit the release")
 	}
 	return nil
+}
+
+// claimForRenewal reads the fields renewal has to reason about: who owns it,
+// what it covers, and whether it is still in force.
+//
+// Separate from claimOwner because renewal is the one operation that has to see
+// the expiry. Everything else only cares whether the row is released.
+func claimForRenewal(tx *sql.Tx, id int64) (*Claim, error) {
+	var c Claim
+	err := tx.QueryRow(
+		`SELECT id, scope_path, recursive, root_id, repo_id, expires_at
+		   FROM claims WHERE id = ? AND released_at IS NULL`, id).
+		Scan(&c.ID, &c.ScopePath, &c.Recursive, &c.RootID, &c.RepoID, &c.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoClaim
+	}
+	if err != nil {
+		return nil, serr.Internalf(err, "failed to read the claim")
+	}
+	return &c, nil
 }
 
 func claimOwner(tx *sql.Tx, id int64) (string, error) {
