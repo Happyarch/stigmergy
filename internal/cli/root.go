@@ -43,6 +43,7 @@ func init() {
 	rootCmd.AddCommand(newMCPCmd())
 	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newInitCmd())
+	rootCmd.AddCommand(newProjectCmd())
 	rootCmd.AddCommand(newExploreCmd())
 	rootCmd.AddCommand(newDeliberateCmd())
 	rootCmd.AddCommand(newImportCmd())

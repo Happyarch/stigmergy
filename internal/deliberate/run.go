@@ -30,7 +30,14 @@ func runWrapped(ctx context.Context, a *Agent, stateDirs []string, cmd []string)
 	ctx, cancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer cancel()
 
-	args := BwrapArgs(a.Workdir, stateDirs, cmd)
+	sb := a.Confine
+	sb.Chdir = a.Workdir
+	sb.StateDirs = stateDirs
+	sb.PayloadPath = a.PayloadPath
+	if len(sb.Repos) == 0 {
+		sb.Repos = []string{a.Workdir}
+	}
+	args := BwrapArgs(sb, cmd)
 	c := exec.CommandContext(ctx, "bwrap", args...)
 	c.Dir = a.Workdir
 

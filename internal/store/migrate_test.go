@@ -70,6 +70,16 @@ func TestRestoringIndexesOnADatabaseThatAlreadyLostThem(t *testing.T) {
 	if _, err := db.Exec(`ALTER TABLE roots DROP COLUMN model`); err != nil {
 		t.Fatalf("undoing 0005: %v", err)
 	}
+	// Every migration after the one under test has to be undone here too, or the
+	// replay runs it against schema it has already changed. That is the cost this
+	// test charges each new migration, and it is the point: a migration that
+	// cannot state how to undo itself is one nobody can reason about replaying.
+	if _, err := db.Exec(`ALTER TABLE claims DROP COLUMN repo_id`); err != nil {
+		t.Fatalf("undoing 0007 (column): %v", err)
+	}
+	if _, err := db.Exec(`DROP TABLE repos`); err != nil {
+		t.Fatalf("undoing 0007 (table): %v", err)
+	}
 	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version >= 4`); err != nil {
 		t.Fatal(err)
 	}

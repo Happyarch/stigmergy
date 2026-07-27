@@ -353,6 +353,25 @@ TTLs: default **1800s** (30 min), minimum **60s**, maximum **86400s** (24h). Out
 range is *rejected*, not clamped — silently giving an agent a different TTL than it
 asked for is how you get an agent that thinks it still holds a claim it doesn't.
 
+### Scopes in a multi-repository project
+
+A project may span several git repositories ([architecture.md §3](architecture.md#3-storage)).
+Where it does, a claim scope is spelled `repo:path` — `naviamp-sidecar:internal/api.go` —
+and that is the spelling you are shown back in conflicts, in `claim_list_active`,
+in the roster and in the hook's denial text. One notation, written and read the
+same way.
+
+`context_open` returns the roster, so the names come from a call you already
+make. A **bare path always means the repository you opened**, so a project with
+one repository never needs a prefix and nothing about it changed.
+
+The `:` is decidable, not ambiguous: the split takes the *first* colon, and the
+head counts as a repository only if it matches a member. `weird:name.go` is
+therefore still a filename. A head that looks like a repository but matches none
+is **refused** rather than silently read as a path — `sidecar:src/x.go` when the
+member is `naviamp-sidecar` would otherwise claim a file that does not exist
+while the real one stayed unguarded.
+
 ### `claim_acquire`
 
 > Reserve a file or directory before editing it, so no other agent edits it at the same time. Take the narrowest scope that covers your work, and release it when you are done.

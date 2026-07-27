@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -140,7 +141,7 @@ type Registration struct {
 }
 
 func (r Registration) validate() error {
-	if !contains(AgentKinds, r.AgentKind) {
+	if !slices.Contains(AgentKinds, r.AgentKind) {
 		// Built from AgentKinds rather than written out: this sentence named the
 		// three hosts it knew about for as long as there were three, and would
 		// have gone on naming them afterwards.
@@ -155,15 +156,6 @@ func (r Registration) validate() error {
 		return serr.E(serr.InvalidInput, "worktree must be an absolute path, got %q", r.Worktree)
 	}
 	return nil
-}
-
-func contains(set []string, v string) bool {
-	for _, s := range set {
-		if s == v {
-			return true
-		}
-	}
-	return false
 }
 
 const rootCols = `root_id, agent_kind, COALESCE(session_label, ''), worktree, COALESCE(branch, ''), COALESCE(model, ''), registered_at, last_seen_at`
@@ -185,9 +177,22 @@ func scanRoot(row interface{ Scan(...any) error }) (*Root, error) {
 // Resume is not an optimization: hosts restart the MCP server process mid
 // session (Claude on /clear, Codex on compact), and a fresh root_id each time
 // would strand the previous root's claims — live, unreleasable, blocking every
-// other agent until TTL. Matching on (agent_kind, worktree, session_label)
-// reconnects the session to the claims it already owns. An empty session_label
-// cannot be matched on, so it always mints a new root.
+// other agent until TTL. Matching on (agent_kind, session_label) reconnects the
+// session to the claims it already owns. An empty session_label cannot be
+// matched on, so it always mints a new root.
+//
+// worktree is deliberately NOT part of that key, and used to be. It is the only
+// identity question in the system that had two different answers depending on
+// which side asked: RootBySession — the read path, the one the claim guard uses
+// to decide whether a claim is your own — has always matched on (agent_kind,
+// session_label) alone. So registering from a second worktree minted a second
+// root for one session, while the guard went on resolving whichever was most
+// recent. The consequences all point the same way: the abandoned root goes
+// silent, lapses at RootTTL, and heartbeat() then releases every claim it held
+// (see the note there) — while the agent, still working, believes it holds them.
+//
+// A root is an agent, not a directory. One host session is one root, wherever it
+// happens to be standing.
 func (d *DB) RegisterRoot(reg Registration) (root *Root, resumed bool, err error) {
 	if err := reg.validate(); err != nil {
 		return nil, false, err
@@ -202,24 +207,31 @@ func (d *DB) RegisterRoot(reg Registration) (root *Root, resumed bool, err error
 	if reg.SessionLabel != "" {
 		existing, err := scanRoot(tx.QueryRow(
 			`SELECT `+rootCols+` FROM roots
-			  WHERE agent_kind = ? AND worktree = ? AND session_label = ?
+			  WHERE agent_kind = ? AND session_label = ?
 			    AND ended_at IS NULL AND last_seen_at > ?
 			  ORDER BY registered_at DESC LIMIT 1`,
-			reg.AgentKind, reg.Worktree, reg.SessionLabel, RootTTLCutoff()))
+			reg.AgentKind, reg.SessionLabel, RootTTLCutoff()))
 		switch {
 		case err == nil:
 			// A resuming session may report a model the first one did not, or a
 			// different one: the host can be restarted onto another model mid
 			// session. COALESCE keeps the last non-empty answer rather than
 			// letting a silent resume erase what an earlier one told us.
+			//
+			// worktree moves with the session rather than identifying it. A root
+			// is an agent, not a directory, so where it most recently said it was
+			// working is the useful answer for the roster and for a conflict
+			// message — and the stale one would be actively misleading.
 			if _, err := tx.Exec(
-				`UPDATE roots SET last_seen_at = ?, branch = ?, model = COALESCE(?, model) WHERE root_id = ?`,
-				now, nullStr(reg.Branch), nullStr(reg.Model), existing.RootID); err != nil {
+				`UPDATE roots SET last_seen_at = ?, worktree = ?, branch = ?, model = COALESCE(?, model)
+				  WHERE root_id = ?`,
+				now, reg.Worktree, nullStr(reg.Branch), nullStr(reg.Model), existing.RootID); err != nil {
 				return nil, false, serr.Internalf(err, "failed to refresh root")
 			}
 			if reg.Model != "" {
 				existing.Model = reg.Model
 			}
+			existing.Worktree = reg.Worktree
 			if err := audit(tx, AuditEntry{
 				Actor: existing.RootID, AgentKind: reg.AgentKind, Action: "root_resume",
 				Target: reg.Worktree, Detail: "session_label=" + reg.SessionLabel,

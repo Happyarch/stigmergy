@@ -7,8 +7,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/ids"
+	"github.com/happyarch/stigmergy/internal/project"
 	"github.com/happyarch/stigmergy/internal/serr"
 	"github.com/happyarch/stigmergy/internal/store"
 )
@@ -18,12 +18,42 @@ type ContextOpenInput struct {
 	ProjectRoot string `json:"project_root" jsonschema:"absolute path to your working directory inside the git repository"`
 }
 
+// RepoInfo is one repository of the project, as reported to an agent.
+type RepoInfo struct {
+	Repo     string `json:"repo"`
+	Worktree string `json:"worktree"`
+	Self     bool   `json:"self,omitempty"`
+}
+
 // ContextOpenOutput reports what was opened.
 type ContextOpenOutput struct {
-	WorktreeRoot     string `json:"worktree_root"`
-	ProjectCommonDir string `json:"project_common_dir"`
-	SchemaVersion    int    `json:"schema_version"`
-	Reopened         bool   `json:"reopened"`
+	// ProjectID is set only for a project spanning several repositories.
+	ProjectID string `json:"project_id,omitempty"`
+	// Repos is the roster. It is returned here rather than from a tool of its
+	// own because context_open is the one call every agent already makes, and a
+	// separate tool would be one more thing to skip — an agent that does not
+	// know the project is wider than its checkout writes claims that mean the
+	// wrong repository.
+	Repos            []RepoInfo `json:"repos,omitempty"`
+	WorktreeRoot     string     `json:"worktree_root"`
+	ProjectCommonDir string     `json:"project_common_dir"`
+	SchemaVersion    int        `json:"schema_version"`
+	Reopened         bool       `json:"reopened"`
+}
+
+// roster renders the members for an agent, marking the one it opened from.
+func roster(p *project.Project) []RepoInfo {
+	if p == nil || len(p.Members) < 2 {
+		// A single-repository project has nothing to disambiguate, and saying so
+		// would invite an agent to start writing "app:src/x.go" where a bare path
+		// is correct and always has been.
+		return nil
+	}
+	out := make([]RepoInfo, 0, len(p.Members))
+	for _, m := range p.Members {
+		out = append(out, RepoInfo{Repo: m.ID, Worktree: m.WorktreeRoot, Self: m.ID == p.SelfID})
+	}
+	return out
 }
 
 func (s *Session) contextOpen(_ context.Context, _ *mcp.CallToolRequest, in ContextOpenInput) (*mcp.CallToolResult, ContextOpenOutput, error) {
@@ -34,42 +64,63 @@ func (s *Session) contextOpen(_ context.Context, _ *mcp.CallToolRequest, in Cont
 		return nil, ContextOpenOutput{}, toolError(serr.E(serr.InvalidInput,
 			"project_root must be an absolute path, got %q", in.ProjectRoot))
 	}
-	repo, err := gitx.Resolve(in.ProjectRoot)
+	proj, err := project.ResolveWithFallback(in.ProjectRoot)
 	if err != nil {
-		if errors.Is(err, gitx.ErrNotARepo) {
+		if errors.Is(err, project.ErrNotARepo) {
 			return nil, ContextOpenOutput{}, toolError(serr.E(serr.NotARepo,
-				"%s is not inside a git repository — stigmergy coordinates per repository", in.ProjectRoot))
+				"%s is not inside a git repository stigmergy is enabled in", in.ProjectRoot))
 		}
-		return nil, ContextOpenOutput{}, toolError(serr.Internalf(err, "could not resolve the git repository for %s", in.ProjectRoot))
+		return nil, ContextOpenOutput{}, toolError(serr.Internalf(err, "could not resolve the project for %s", in.ProjectRoot))
 	}
 
-	// Idempotent for the same repo: re-opening keeps the registered root, so a
-	// re-issued context_open cannot silently strand an agent's claims.
-	if s.state >= Opened && s.repo.CommonDir == repo.CommonDir {
+	// Idempotent for the same PROJECT, not the same repository.
+	//
+	// That distinction is a bug fix as much as a feature. Keying on the git
+	// common dir meant an agent re-opening from a sibling repository of the same
+	// project took the close-and-swap path below — dropping s.root and leaving
+	// its claims live but unreachable until they timed out, for no reason at all,
+	// since both repositories share one database.
+	if s.state >= Opened && s.project != nil && s.project.Path == proj.DBPath {
 		v, err := s.project.SchemaVersion()
 		if err != nil {
 			return nil, ContextOpenOutput{}, toolError(serr.Internalf(err, "could not read the schema version"))
 		}
+		// The freshly resolved project replaces the old one rather than merely
+		// refreshing its roster. Same database, but the resolution is what carries
+		// the session's own identity: an agent re-opening from a sibling repository
+		// means "I am here now", and keeping the previous SelfID would resolve its
+		// bare scope paths against the repository it left — silently claiming the
+		// wrong file. Loading also picks up a repository that joined since.
+		if err := proj.Load(s.project); err != nil {
+			return nil, ContextOpenOutput{}, toolError(serr.Internalf(err, "could not read the project's repositories"))
+		}
+		s.proj = proj
 		return nil, ContextOpenOutput{
-			WorktreeRoot: s.repo.WorktreeRoot, ProjectCommonDir: s.repo.CommonDir,
+			ProjectID: s.proj.ID, Repos: roster(s.proj),
+			WorktreeRoot: s.worktree(), ProjectCommonDir: s.proj.Repo.CommonDir,
 			SchemaVersion: v, Reopened: true,
 		}, nil
 	}
 
-	project, err := store.OpenProject(repo.CommonDir)
+	db, err := store.OpenProjectAt(proj.DBPath)
 	if err != nil {
 		return nil, ContextOpenOutput{}, toolError(serr.Internalf(err, "could not open the project database"))
 	}
 	global, err := store.OpenGlobal(s.globalPath)
 	if err != nil {
-		project.Close()
+		db.Close()
 		return nil, ContextOpenOutput{}, toolError(serr.Internalf(err, "could not open the global database"))
 	}
-	v, err := project.SchemaVersion()
+	v, err := db.SchemaVersion()
 	if err != nil {
-		project.Close()
+		db.Close()
 		global.Close()
 		return nil, ContextOpenOutput{}, toolError(serr.Internalf(err, "could not read the schema version"))
+	}
+	if err := proj.Load(db); err != nil {
+		db.Close()
+		global.Close()
+		return nil, ContextOpenOutput{}, toolError(serr.Internalf(err, "could not read the project's repositories"))
 	}
 
 	if s.project != nil {
@@ -78,15 +129,21 @@ func (s *Session) contextOpen(_ context.Context, _ *mcp.CallToolRequest, in Cont
 	if s.global != nil {
 		s.global.Close()
 	}
-	s.repo, s.project, s.global = repo, project, global
+	s.proj, s.project, s.global = proj, db, global
 	s.state, s.root = Opened, nil
 
 	// Opportunistic housekeeping, off the hot path: nothing else ever ends the
 	// roots of agents that died without deregistering.
-	_, _ = project.ReapStaleRoots()
+	_, _ = db.ReapStaleRoots()
+	// An agent opening this project is proof it is in use, so record it for
+	// `doctor --all`. Best-effort, and never on the hook path — see
+	// store.RememberProject.
+	_ = global.RememberProject(db.Path, db.Label(proj.Repo.WorktreeRoot))
 
 	return nil, ContextOpenOutput{
-		WorktreeRoot: repo.WorktreeRoot, ProjectCommonDir: repo.CommonDir, SchemaVersion: v,
+		ProjectID: proj.ID, Repos: roster(proj),
+		WorktreeRoot: proj.Repo.WorktreeRoot, ProjectCommonDir: proj.Repo.CommonDir,
+		SchemaVersion: v,
 	}, nil
 }
 
@@ -191,7 +248,10 @@ func (s *Session) rootListActive(_ context.Context, _ *mcp.CallToolRequest, _ st
 	}
 	held := map[string][]string{}
 	for _, c := range claims {
-		scope := c.ScopePath
+		// Qualified, not bare: two members of a project can both contain
+		// "src/api.go", and a roster that says only "src/api" leaves the reader
+		// unable to tell whether the path in front of it is the one held.
+		scope := c.Qualified()
 		if c.Recursive {
 			scope += "/**"
 		}

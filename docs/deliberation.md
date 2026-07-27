@@ -479,6 +479,23 @@ questions is not the unattended tool most runs want.
     └── 2/…
 ```
 
+**SUPERSEDED — runs now live in `$XDG_STATE_HOME/stigmergy/deliberate/<run-id>/`.**
+A deliberation may span several repositories, so there is no single repository to
+put the run in, and choosing one would make that repository special in a design
+that is otherwise symmetric. XDG *state* rather than data: this is transient run
+output, which is the distinction `internal/xdg` already draws.
+
+Two consequences worth having in front of you. The old path joined `.git`
+literally, which is a *file* rather than a directory in a linked worktree — that
+latent bug left with it. And the tmpfs that hides the run from the workers must
+now be applied **after** the `$HOME` overlay, because XDG state is inside `$HOME`:
+applied before, the overlay restores the real directory through its lower layer
+and every worker can read every other worker's turns, silently, with nothing in
+the argv looking wrong. `TestTheRunDirectoryUnderHomeIsMaskedAfterTheHomeOverlay`
+is what notices, and it was verified by deliberately mis-ordering the mounts.
+
+The original reasoning, kept because the constraint it names still holds:
+
 The **git common dir**, for the same reason `stigmergy.sqlite3` is there
 (architecture.md §3): linked worktrees of one repository share it, so a run is
 visible from every worktree of the repo it belongs to, and separate clones stay
@@ -611,6 +628,33 @@ authority.
 Payload assembly is one function with one shape, host-independent. Adapters
 ([§6](#6-harness-adapters)) decide how to *deliver* a payload; nothing in an
 adapter decides what is *in* one.
+
+**Delivery is a bound file, not argv.** The payload is written into the run
+directory and `--ro-bind` mounted into the sandbox at `/tmp/stigmergy-payload.md`;
+argv carries only a fixed sentence pointing at it.
+
+This is the licence above being spent. Linux caps a *single* argv element at
+`MAX_ARG_STRLEN` — 32 pages, 131072 bytes — and the payload crossed **two**
+`execve` boundaries, since the driver execs bwrap and bwrap execs the host. A
+spec that grew past the cap killed the turn with `E2BIG`, and a failing run grows
+its spec every round: it marched into the wall exactly when it could least afford
+to.
+
+One mechanism for all four hosts, rather than stdin for the three that support
+it. agy's `--print`/`--prompt` are Go-style *valued* flags — the prompt IS the
+flag's value, with no positional slot and no documented stdin path — so a file
+was required there regardless, and two delivery paths across four adapters is
+strictly worse than one. It is also more private than argv, which is
+world-readable through `/proc`: each turn gets its own bwrap with its own `/tmp`
+tmpfs, so one worker cannot see another's brief even in principle.
+
+Always used, never size-switched. A "spill to a file only when it is large"
+branch would be exercised only on long runs — which are the ones already in
+trouble, and the ones you can least afford to lose to an untested path.
+
+The bind goes after the `/tmp` tmpfs, or the tmpfs masks it, and under `/tmp`
+specifically so neither the repository overlays nor the `$HOME` overlay can
+shadow it later.
 
 ### 5.1 The verdict protocol
 
@@ -980,7 +1024,8 @@ None of it is real:
 
 ```
 bwrap --ro-bind / /  --dev-bind /dev /dev  --proc /proc  --tmpfs /tmp
-      --overlay-src <repo>  --tmp-overlay <repo>      the repo, shadowed
+      --ro-bind <brief> /tmp/stigmergy-payload.md      this turn's brief (§5)
+      --overlay-src <repo>  --tmp-overlay <repo>      EACH member repo, shadowed
       --overlay-src $HOME   --tmp-overlay $HOME       every tool cache, shadowed
       --bind <host-state> <host-state>                sessions: real, on top
       --chdir <repo>  --  <host command …>
@@ -1264,7 +1309,7 @@ stigmergy deliberate --seed <text|file> --out <path> [flags]
 The trigger is a person typing the command. Not an agent, not a hook, not another
 model deciding a spec needs deliberating. This is a deliberate constraint on an
 expensive tool: a round is four full agent turns, the default is three rounds,
-and the ceiling is **twelve turns across three harnesses** — most of them on large
+and the ceiling is **eighteen turns across three harnesses** (six per round: five roles, plus the judge's one re-prompt when its verdict will not parse) — most of them on large
 models reading a repository. That is not a thing to discover afterwards.
 
 So before the first agent is invoked, the driver prints what it is about to do and
@@ -1287,7 +1332,7 @@ stigmergy deliberate — 3 agents, up to 3 rounds
 
 `--yes` skips it for scripted runs. The preview names the *degraded* modes
 (sessionless, unconfined, same-model) because those are exactly what a person would
-want to know before spending twelve turns, and exactly what is easiest to not
+want to know before spending eighteen turns, and exactly what is easiest to not
 notice.
 
 `--max-rounds` defaults to **3** and not 5, for the same reason. Three rounds is

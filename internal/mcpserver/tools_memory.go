@@ -192,7 +192,7 @@ func (s *Session) memoryPromote(_ context.Context, _ *mcp.CallToolRequest, in Me
 		ExpectedGlobalVersion: in.ExpectedGlobalVersion,
 		Actor:                 s.actor(),
 		AgentKind:             s.agentKind(),
-		SourceCommonDir:       s.repo.CommonDir,
+		SourceCommonDir:       s.commonDir(),
 	})
 	if err != nil {
 		return nil, MemoryPromoteOutput{}, toolError(err)

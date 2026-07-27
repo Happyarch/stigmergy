@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/hosts"
+	"github.com/happyarch/stigmergy/internal/project"
 	"github.com/happyarch/stigmergy/internal/store"
 )
 
@@ -50,16 +50,29 @@ func Registered(agentKind, sessionLabel, cwd string) bool {
 // the agent's own claims from everyone else's; without it every agent would be
 // blocked by its own claims, so it is stated as the first thing to do.
 func SessionStartText(agentKind, sessionID, cwd string) string {
-	repo, err := gitx.Resolve(cwd)
-	if err != nil {
+	proj, err := project.Resolve(cwd)
+	if err != nil || !proj.Adopted() {
 		return ""
 	}
-	if _, err := os.Stat(store.ProjectDBPath(repo.CommonDir)); err != nil {
-		return ""
+	repo := proj.Repo
+
+	// One open for the whole text. Both summaries below read the same project on
+	// the same connection; opening twice on the session-start path bought nothing
+	// but a second git resolve, sqlite open and version check.
+	p, projectOpen := openQuietly(cwd, readOnly)
+	if projectOpen {
+		defer p.DB.Close()
 	}
 
 	var sb strings.Builder
 	sb.WriteString("This project uses stigmergy for shared memory and coordination between agents.\n\n")
+	// An agent that does not know the project is wider than its own checkout will
+	// claim "src/api" meaning one repository and be surprised by a conflict from
+	// another. Said once, at the top, before any of the calls that need it.
+	if members := memberSummary(p); members != "" {
+		sb.WriteString(members)
+		sb.WriteString("\n")
+	}
 
 	host, hostKnown := hosts.Get(agentKind)
 	if hostKnown && host.SelfRegisters() && os.Getenv(host.SessionEnv) != "" {
@@ -112,7 +125,7 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 		sb.WriteString("\n")
 	}
 
-	if claims := activeClaimSummary(repo); claims != "" {
+	if claims := activeClaimSummary(p); claims != "" {
 		sb.WriteString("\nClaims currently held by other agents:\n")
 		sb.WriteString(claims)
 		sb.WriteString("\nThose root ids are the only agents you may write to. If one of them is in your way, " +
@@ -131,23 +144,50 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 	return sb.String()
 }
 
+// memberSummary describes a project that spans several repositories, and says
+// nothing at all about one that does not.
+//
+// The silence matters as much as the text. Almost every project has exactly one
+// repository, and telling those agents "this project has 1 repository: app, and
+// scopes may be written app:path" is noise that makes a real multi-repo notice
+// easier to skip.
+// A nil project — one that could not be opened, or that this binary's version
+// gate rejected — says nothing, like a project with a single repository.
+func memberSummary(p *opened) string {
+	if p == nil {
+		return ""
+	}
+	if len(p.Project.Members) < 2 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("This project spans several git repositories, and your claims say which one they mean:\n")
+	for _, m := range p.Project.Members {
+		here := ""
+		if m.ID == p.Project.SelfID {
+			here = "   <- you are here"
+		}
+		fmt.Fprintf(&sb, "  %-24s %s%s\n", m.ID, m.WorktreeRoot, here)
+	}
+	sb.WriteString("Write a scope as \"repo:path\" — claim_acquire(scope_path=\"" +
+		p.Project.MemberIDs()[0] + ":src/thing.go\"). A bare path means the repository you are in.\n")
+	return sb.String()
+}
+
 // activeClaimSummary tells an arriving agent what is already spoken for, so it
 // can plan around the contested files instead of discovering them one blocked
 // edit at a time.
-func activeClaimSummary(repo *gitx.Repo) string {
-	db, err := store.OpenProject(repo.CommonDir, store.ReadOnly(), store.BusyTimeout(HookBusyTimeout))
-	if err != nil {
+func activeClaimSummary(p *opened) string {
+	if p == nil {
 		return ""
 	}
-	defer db.Close()
-
-	active, err := db.ActiveClaims("")
+	active, err := p.DB.ActiveClaims("")
 	if err != nil || len(active) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	for _, c := range active {
-		scope := c.ScopePath
+		scope := c.Qualified()
 		if c.Recursive {
 			scope += "/**"
 		}
@@ -165,17 +205,11 @@ func activeClaimSummary(repo *gitx.Repo) string {
 // Everything here is best-effort: the session is already over, and the root TTL
 // is the backstop if this does not land.
 func EndSession(agentKind, sessionID, cwd string) {
-	repo, err := gitx.Resolve(cwd)
-	if err != nil {
+	p, ok := openQuietly(cwd, writable)
+	if !ok {
 		return
 	}
-	if _, err := os.Stat(store.ProjectDBPath(repo.CommonDir)); err != nil {
-		return
-	}
-	db, err := store.OpenProject(repo.CommonDir, store.BusyTimeout(HookBusyTimeout))
-	if err != nil {
-		return
-	}
+	db := p.DB
 	defer db.Close()
 
 	root, err := db.RootBySession(agentKind, sessionID)
@@ -192,14 +226,11 @@ func EndSession(agentKind, sessionID, cwd string) {
 // Claude such an edit is impossible; on Codex it is merely halted afterwards,
 // so the trail is what tells an operator which file to go and check.
 func AuditCodexConflict(sessionID, cwd string, d Decision) {
-	repo, err := gitx.Resolve(cwd)
-	if err != nil {
+	p, ok := openQuietly(cwd, writable)
+	if !ok {
 		return
 	}
-	db, err := store.OpenProject(repo.CommonDir, store.BusyTimeout(HookBusyTimeout))
-	if err != nil {
-		return
-	}
+	db := p.DB
 	defer db.Close()
 
 	for _, c := range d.Conflicts {
@@ -207,7 +238,7 @@ func AuditCodexConflict(sessionID, cwd string, d Decision) {
 			Actor:     sessionID,
 			AgentKind: "codex",
 			Action:    "codex_post_edit_conflict",
-			Target:    c.ScopePath,
+			Target:    c.Qualified(),
 			Detail: fmt.Sprintf("edit landed on a path claimed by %s (claim %d, reason: %s); turn halted",
 				c.RootID, c.ID, c.Reason),
 		})
@@ -221,19 +252,16 @@ func AuditDenial(agentKind, sessionID, cwd string, d Decision) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		repo, err := gitx.Resolve(cwd)
-		if err != nil {
+		p, ok := openQuietly(cwd, writable)
+		if !ok {
 			return
 		}
-		db, err := store.OpenProject(repo.CommonDir, store.BusyTimeout(HookBusyTimeout))
-		if err != nil {
-			return
-		}
+		db := p.DB
 		defer db.Close()
 
 		target, detail := "", "claim verification unavailable"
 		if len(d.Conflicts) > 0 {
-			target = d.Conflicts[0].ScopePath
+			target = d.Conflicts[0].Qualified()
 			detail = fmt.Sprintf("blocked by claim %d held by %s", d.Conflicts[0].ID, d.Conflicts[0].RootID)
 		}
 		_ = db.Audit(store.AuditEntry{

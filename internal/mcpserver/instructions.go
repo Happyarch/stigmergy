@@ -42,6 +42,7 @@ Memories
 Claims
 - A claim reserves a file or a directory subtree while you work on it, so two agents do not edit the same thing at once.
 - claim_acquire(scope_path, recursive, reason, ttl_seconds) takes the narrowest scope that covers your edit. Claims expire; renew with claim_renew if you are still working, release with claim_release as soon as you are done.
+- A project may span several git repositories. Where it does, context_open lists them and a scope is spelled "repo:path" — the same spelling you are shown in conflicts, in claim_list_active and in the roster. A bare path always means the repository you opened, so single-repository projects never need the prefix.
 - If claim_acquire returns a claim_conflict, the owner is named. Do not wait silently and do not edit anyway: use mailbox_send to negotiate, or work elsewhere.
 - Hosts differ in what they can enforce, and stigmergy never pretends otherwise. An edit to a claimed path is blocked outright in ` + claims + `. In ` + warned + ` it cannot be blocked before it lands, so the turn is halted after the fact — respect claims there or you will lose work.
 

@@ -56,11 +56,21 @@ func TestOverlaps(t *testing.T) {
 	}
 }
 
-func TestCovers(t *testing.T) {
-	if !Covers(Scope{Path: "src", Recursive: true}, "src/deep/file.go") {
+// A single file, expressed the way a caller asking "is this path claimed?" does:
+// a non-recursive scope naming exactly it.
+//
+// This used to go through a Covers(scope, path) helper. The helper is gone —
+// see the note at the bottom of overlap.go — because it built its second operand
+// from a partial struct literal, which is the shape that silently fails open
+// once a Scope carries more than a path. The behaviour it checked is unchanged
+// and is checked here directly.
+func TestAScopeGoverningASingleFile(t *testing.T) {
+	file := func(p string) Scope { return Scope{Path: p} }
+
+	if !Overlaps(Scope{Path: "src", Recursive: true}, file("src/deep/file.go")) {
 		t.Error("a recursive claim on src must cover src/deep/file.go")
 	}
-	if Covers(Scope{Path: "src", Recursive: false}, "src/deep/file.go") {
+	if Overlaps(Scope{Path: "src", Recursive: false}, file("src/deep/file.go")) {
 		t.Error("a file claim on src must not cover files under it")
 	}
 }

@@ -3,11 +3,10 @@ package hooks
 import (
 	"errors"
 	"fmt"
-	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/paths"
 	"github.com/happyarch/stigmergy/internal/store"
 )
@@ -23,6 +22,11 @@ type Decision struct {
 	Reason string
 	// Conflicts are the foreign claims covering the path, if any.
 	Conflicts []store.Claim
+	// CWD is the working directory whose project produced this decision. It
+	// matters for the hosts that can edit across two projects at once: a caller
+	// recording the denial has to write it to the database that actually holds
+	// the claim, not to whichever workspace the tool call happened to list first.
+	CWD string
 }
 
 // Guard decides whether an agent may write the given paths.
@@ -32,45 +36,30 @@ type Decision struct {
 // agent editing an unclaimed file — costs one read-only query and nothing else.
 // Only genuine uncertainty reaches the fail-closed branch.
 func Guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
+	d := guard(agentKind, sessionLabel, cwd, editPaths)
+	d.CWD = cwd
+	return d
+}
+
+func guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
 	if len(editPaths) == 0 {
 		// An unrecognized tool shape. We do not know what it writes, so we do
 		// not pretend to govern it.
 		return Decision{Allow: true}
 	}
 
-	repo, err := gitx.Resolve(cwd)
-	if err != nil {
-		// Not a git repository: stigmergy coordinates repositories, and has no
-		// opinion about anything else.
+	// The guard is the one hook that acts on the difference between "nothing to
+	// govern here" and "something is here and I cannot verify it": the first
+	// allows, the second fails closed. See resolveProject.
+	p, why := resolveProject(cwd, readOnly)
+	if why != nil {
+		return failClosed(why.Reason, why.Err)
+	}
+	if p == nil {
 		return Decision{Allow: true}
 	}
-
-	dbPath := store.ProjectDBPath(repo.CommonDir)
-	if _, err := os.Stat(dbPath); err != nil {
-		// stigmergy is not enabled here. No database means no claims, means
-		// nothing to enforce — an unadopted project must not be slowed or
-		// blocked by a hook that happens to be installed globally.
-		return Decision{Allow: true}
-	}
-
-	db, err := store.OpenProject(repo.CommonDir, store.ReadOnly(), store.BusyTimeout(HookBusyTimeout))
-	if err != nil {
-		return failClosed("the project database could not be opened", err)
-	}
+	db := p.DB
 	defer db.Close()
-
-	// A database from a newer stigmergy may express claims in ways this binary
-	// cannot read. Silently allowing the edit would mean silently ignoring
-	// claims that do exist.
-	version, err := db.SchemaVersion()
-	if err != nil {
-		return failClosed("the project database schema could not be read", err)
-	}
-	latest, err := store.LatestVersion(store.Project)
-	if err != nil || version != latest {
-		return failClosed(fmt.Sprintf(
-			"the project database is at schema version %d but this stigmergy expects %d", version, latest), err)
-	}
 
 	// Resolve who we are. An unregistered session has no root, so every claim
 	// is foreign to it — including, potentially, one it made in a previous
@@ -84,15 +73,33 @@ func Guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
 	}
 
 	var conflicts []store.Claim
-	for _, p := range editPaths {
-		rel, err := paths.Normalize(repo.WorktreeRoot, cwd, p)
+	for _, edit := range editPaths {
+		// cwd found the PROJECT. Which repository governs this edit is decided by
+		// the path itself, not by where the agent happens to be standing — that
+		// is the whole change here. Every host can edit outside its cwd's
+		// repository (Claude's --add-dir, Antigravity's multiple workspaces, an
+		// absolute path from anywhere), and resolving against cwd's worktree meant
+		// those edits landed outside it, were treated as ungoverned, and were
+		// silently ALLOWED past another agent's claim.
+		abs, err := absolutize(cwd, edit)
+		if err != nil {
+			return failClosed(fmt.Sprintf("the path %q could not be resolved", edit), err)
+		}
+		member := p.Project.Containing(abs)
+		if member == nil {
+			continue // Outside every repository of this project: not ours to govern.
+		}
+		rel, err := paths.Normalize(member.WorktreeRoot, cwd, edit)
 		if errors.Is(err, paths.ErrOutsideWorktree) {
-			continue // Outside the repo: not governed by claims.
+			// Containing said otherwise, so the two disagree — a symlink out of
+			// the tree, most likely. Normalize is the stricter of the two and it
+			// wins; it is the one that resolves symlinks.
+			continue
 		}
 		if err != nil {
-			return failClosed(fmt.Sprintf("the path %q could not be resolved", p), err)
+			return failClosed(fmt.Sprintf("the path %q could not be resolved", edit), err)
 		}
-		covering, err := db.ClaimsCovering(rel, selfRoot)
+		covering, err := db.ClaimsCovering(member.ID, rel, selfRoot)
 		if err != nil {
 			return failClosed("claims could not be read", err)
 		}
@@ -106,6 +113,94 @@ func Guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
 		return Decision{Allow: true}
 	}
 	return Decision{Allow: false, Reason: denyReason(conflicts), Conflicts: conflicts}
+}
+
+// GuardWorkspaces decides for a set of edits that may be spread across several
+// mounted workspaces, and therefore across several unrelated projects.
+//
+// Guard already handles many repositories, but only within ONE project: it
+// resolves a project from a single cwd and then uses that project's roster to
+// place each path. Antigravity is the host that can break that assumption —
+// it reports every workspace the user has open, and there is nothing stopping
+// two of them being different projects with different databases.
+//
+// So group the edits by the workspace that contains each one, and guard each
+// group against its own project. In the ordinary case every edit lands in one
+// group and this is exactly Guard with one extra map lookup.
+//
+// cwdFor maps an edit path to the workspace holding it; the host supplies it,
+// because only the host knows what it mounted.
+func GuardWorkspaces(agentKind, sessionLabel string, cwdFor func(string) string, editPaths []string) Decision {
+	if len(editPaths) == 0 {
+		return Decision{Allow: true}
+	}
+	groups, order := groupByWorkspace(cwdFor, editPaths)
+
+	var conflicts []store.Claim
+	deciding := ""
+	for _, cwd := range order {
+		d := Guard(agentKind, sessionLabel, cwd, groups[cwd])
+		if d.Allow {
+			continue
+		}
+		if deciding == "" {
+			// The first workspace to deny owns the decision, so a caller auditing
+			// it opens the project that holds the claim it names.
+			deciding = cwd
+		}
+		// A fail-closed group has no conflicts to report and its own reason
+		// already says what to do, so it short-circuits: there is nothing to
+		// usefully merge it with.
+		if len(d.Conflicts) == 0 {
+			return d
+		}
+		conflicts = append(conflicts, d.Conflicts...)
+	}
+	if len(conflicts) == 0 {
+		return Decision{Allow: true}
+	}
+	return Decision{Allow: false, Reason: denyReason(conflicts), Conflicts: conflicts, CWD: deciding}
+}
+
+// Workspaces is the distinct workspaces holding the given edits, in the order
+// they first appear. It is what a host needs for the things that are per-project
+// rather than per-call — a heartbeat is owed to every project being edited in,
+// not only to the one that happened to be listed first.
+func Workspaces(cwdFor func(string) string, editPaths []string) []string {
+	_, order := groupByWorkspace(cwdFor, editPaths)
+	return order
+}
+
+// groupByWorkspace buckets edits by the workspace containing each, keeping first
+// appearance order so decisions and messages are stable.
+func groupByWorkspace(cwdFor func(string) string, editPaths []string) (map[string][]string, []string) {
+	groups := map[string][]string{}
+	order := []string{}
+	for _, p := range editPaths {
+		cwd := cwdFor(p)
+		if _, seen := groups[cwd]; !seen {
+			order = append(order, cwd)
+		}
+		groups[cwd] = append(groups[cwd], p)
+	}
+	return groups, order
+}
+
+// absolutize resolves an agent-supplied path against the working directory,
+// without touching the filesystem.
+//
+// Deliberately cheap and deliberately not symlink-resolving: this only has to be
+// good enough to pick which repository a path belongs to. paths.Normalize does
+// the careful work — symlinks, missing files, escape checks — once the member is
+// known, and it is the authority if the two ever disagree.
+func absolutize(cwd, p string) (string, error) {
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p), nil
+	}
+	if cwd == "" {
+		return "", errors.New("hooks: relative path with no working directory to resolve it against")
+	}
+	return filepath.Join(cwd, p), nil
 }
 
 // failClosed is the answer when we cannot tell whether a path is claimed.
@@ -144,7 +239,10 @@ func denyReason(conflicts []store.Claim) string {
 func ConflictDetail(conflicts []store.Claim) string {
 	var sb strings.Builder
 	for _, c := range conflicts {
-		fmt.Fprintf(&sb, "  %s is claimed by root %s", c.ScopePath, c.RootID)
+		// Qualified, not the bare scope path: in a project spanning several
+		// repositories "src/api is claimed" does not tell an agent enough to act
+		// on, and it names a path that exists in more than one of them.
+		fmt.Fprintf(&sb, "  %s is claimed by root %s", c.Qualified(), c.RootID)
 		// Who you are about to argue with, as specifically as we can say it:
 		// the harness, and the model behind it if it told us.
 		switch {

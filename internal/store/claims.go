@@ -27,6 +27,9 @@ type Claim struct {
 	ScopePath string `json:"scope_path"`
 	Recursive bool   `json:"recursive"`
 	RootID    string `json:"root_id"`
+	// RepoID is the member repository scope_path is relative to. Empty means the
+	// project's only repository — see LegacyRepoID.
+	RepoID    string `json:"repo,omitempty"`
 	AgentKind string `json:"agent_kind"`
 	// OwnerModel is what the holder said it was, if it said. Advisory, like
 	// every other use of it: it tells an agent who it is about to negotiate
@@ -48,17 +51,85 @@ type Claim struct {
 	Own bool `json:"own"`
 }
 
-// Scope is the claim's coverage, for the pure overlap logic.
-func (c Claim) Scope() claims.Scope {
-	return claims.Scope{Path: c.ScopePath, Recursive: c.Recursive}
+// RepoScope is a claim's coverage together with the repository it lives in.
+//
+// The repository is deliberately NOT a field on claims.Scope. That package is
+// pure path algebra and stays that way — but the deciding reason is narrower: a
+// Scope with a repo field would have a zero value that names no repository, and
+// every construction site that forgot it would silently compare equal to every
+// other one that did. A missing repo must not be spellable, so it lives out here
+// where the only two constructors are the two below.
+type RepoScope struct {
+	Repo  string
+	Scope claims.Scope
 }
+
+// RepoScope is the claim's coverage, for the overlap test.
+func (c Claim) RepoScope() RepoScope {
+	return RepoScope{Repo: c.RepoID, Scope: claims.Scope{Path: c.ScopePath, Recursive: c.Recursive}}
+}
+
+// overlaps reports whether two claims can be in each other's way.
+//
+// Two claims conflict when they name the same repository AND their paths
+// overlap. The same path in two members is two different files, with no shared
+// assumption behind them: without this, a claim on the client's README.md would
+// block someone editing the service's.
+//
+// Note this does NOT reintroduce the worktree into the decision. Linked
+// worktrees of one repository share a repo_id, so a claim taken in one still
+// blocks the other — deliberately, because a claim protects assumptions rather
+// than bytes, and two agents on two branches of one codebase are invalidating
+// each other's work even though the files on disk are distinct.
+func overlaps(a, b RepoScope) bool {
+	return sameRepo(a.Repo, b.Repo) && claims.Overlaps(a.Scope, b.Scope)
+}
+
+// covers reports whether a claim governs a specific file in a specific repo.
+//
+// Two arguments, not one Scope, so a caller cannot pass a half-built value: the
+// repo and the path arrive together or not at all.
+func covers(s RepoScope, repo, path string) bool {
+	return overlaps(s, RepoScope{Repo: repo, Scope: claims.Scope{Path: path}})
+}
+
+// sameRepo compares two repo ids, treating the empty one as matching anything.
+//
+// Empty means "this project's only repository" (LegacyRepoID). In a single-repo
+// project every claim carries it and everything matches, which is the old
+// behavior exactly. In a multi-repo project the backfill has given every claim a
+// real name, so an empty one should not occur — and if one somehow does, this
+// makes it block more rather than less. That is the safe direction: a false
+// conflict costs one conversation, a missed one costs somebody's work.
+func sameRepo(a, b string) bool {
+	return a == b || a == LegacyRepoID || b == LegacyRepoID
+}
+
+// QualifyScope spells a claim the way agents read and write it: "repo:path" in a
+// project with several repositories, and a bare path in one with a single
+// repository, where a prefix would be noise naming the only option there is.
+//
+// One spelling, used everywhere a claim is shown — conflict messages, the
+// roster, the audit trail, the hook's denial text — because an agent that is
+// told "src/api is claimed" in a two-repository project has not been told enough
+// to act, and a second spelling for the same thing is a second thing to get
+// wrong.
+func QualifyScope(repoID, scopePath string) string {
+	if repoID == LegacyRepoID {
+		return scopePath
+	}
+	return repoID + ":" + scopePath
+}
+
+// Qualified is the claim's scope in the spelling agents use.
+func (c Claim) Qualified() string { return QualifyScope(c.RepoID, c.ScopePath) }
 
 // activeClaims selects claims that still bind. A claim binds only while it is
 // unreleased AND unexpired AND its owner is still alive: a root that crashed
 // must not hold the repository hostage, so root liveness is part of the
 // predicate rather than something a cleanup daemon has to catch up on.
 const activeClaims = `
-SELECT c.id, c.scope_path, c.recursive, c.root_id, r.agent_kind, COALESCE(r.model, ''), c.worktree,
+SELECT c.id, c.scope_path, c.recursive, c.root_id, c.repo_id, r.agent_kind, COALESCE(r.model, ''), c.worktree,
        COALESCE(c.branch, ''), c.reason, c.created_at, c.expires_at, r.last_seen_at
   FROM claims c JOIN roots r ON r.root_id = c.root_id
  WHERE c.released_at IS NULL
@@ -72,7 +143,7 @@ func scanClaims(rows *sql.Rows, selfRoot string) ([]Claim, error) {
 	for rows.Next() {
 		var c Claim
 		var owner Root
-		if err := rows.Scan(&c.ID, &c.ScopePath, &c.Recursive, &c.RootID, &c.AgentKind, &c.OwnerModel,
+		if err := rows.Scan(&c.ID, &c.ScopePath, &c.Recursive, &c.RootID, &c.RepoID, &c.AgentKind, &c.OwnerModel,
 			&c.Worktree, &c.Branch, &c.Reason, &c.CreatedAt, &c.ExpiresAt, &owner.LastSeenAt); err != nil {
 			return nil, serr.Internalf(err, "failed to read claims")
 		}
@@ -108,14 +179,16 @@ func (d *DB) ActiveClaims(selfRoot string) ([]Claim, error) { return activeIn(d.
 // is easy to get subtly wrong. Claim counts are tiny — a handful of agents,
 // each holding a few paths — so filtering in Go costs nothing and keeps one
 // tested definition of overlap for both the server and the hook.
-func (d *DB) ClaimsCovering(path, selfRoot string) ([]Claim, error) {
+// The repo is a separate argument rather than part of the path so that a caller
+// physically cannot ask about a path without saying where it lives.
+func (d *DB) ClaimsCovering(repoID, path, selfRoot string) ([]Claim, error) {
 	all, err := d.ActiveClaims(selfRoot)
 	if err != nil {
 		return nil, err
 	}
 	var out []Claim
 	for _, c := range all {
-		if claims.Covers(c.Scope(), path) {
+		if covers(c.RepoScope(), repoID, path) {
 			out = append(out, c)
 		}
 	}
@@ -124,9 +197,13 @@ func (d *DB) ClaimsCovering(path, selfRoot string) ([]Claim, error) {
 
 // ClaimRequest is a claim_acquire.
 type ClaimRequest struct {
-	ScopePath  string
-	Recursive  bool
-	RootID     string
+	ScopePath string
+	Recursive bool
+	RootID    string
+	// RepoID is the member repository ScopePath is relative to. Empty is the
+	// project's only repository, which is what a single-repo project always
+	// passes and what every claim written before 0007 carries.
+	RepoID     string
 	Worktree   string
 	Branch     string
 	Reason     string
@@ -171,9 +248,9 @@ func (d *DB) AcquireClaim(req ClaimRequest) (*Claim, error) {
 	if err != nil {
 		return nil, err
 	}
-	want := claims.Scope{Path: req.ScopePath, Recursive: req.Recursive}
+	want := RepoScope{Repo: req.RepoID, Scope: claims.Scope{Path: req.ScopePath, Recursive: req.Recursive}}
 	for _, c := range existing {
-		if !claims.Overlaps(c.Scope(), want) {
+		if !overlaps(c.RepoScope(), want) {
 			continue
 		}
 		if c.RootID == req.RootID {
@@ -188,16 +265,16 @@ func (d *DB) AcquireClaim(req ClaimRequest) (*Claim, error) {
 			"%s is claimed by %s — %s (worktree %s, reason: %q, expires %s). "+
 				"Write to that root with mailbox_send(to_root=%q), or work elsewhere. "+
 				"Do not address any other root about this path: %s is the one holding it.",
-			req.ScopePath, c.RootID, c.OwnerLiveness, c.Worktree, c.Reason, c.ExpiresAt,
+			c.Qualified(), c.RootID, c.OwnerLiveness, c.Worktree, c.Reason, c.ExpiresAt,
 			c.RootID, c.RootID).
 			With("conflict", c)
 	}
 
 	now := NowTime()
 	res, err := tx.Exec(
-		`INSERT INTO claims(scope_path, recursive, root_id, worktree, branch, reason, created_at, expires_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.ScopePath, req.Recursive, req.RootID, req.Worktree, nullStr(req.Branch), req.Reason,
+		`INSERT INTO claims(scope_path, recursive, root_id, repo_id, worktree, branch, reason, created_at, expires_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.ScopePath, req.Recursive, req.RootID, req.RepoID, req.Worktree, nullStr(req.Branch), req.Reason,
 		Stamp(now), Stamp(now.Add(ttl)),
 	)
 	if err != nil {
@@ -205,7 +282,8 @@ func (d *DB) AcquireClaim(req ClaimRequest) (*Claim, error) {
 	}
 	id, _ := res.LastInsertId()
 	if err := audit(tx, AuditEntry{
-		Actor: req.RootID, Action: "claim_acquire", Target: req.ScopePath, Detail: req.Reason,
+		Actor: req.RootID, Action: "claim_acquire", Target: QualifyScope(req.RepoID, req.ScopePath),
+		Detail: req.Reason,
 	}); err != nil {
 		return nil, serr.Internalf(err, "failed to write audit record")
 	}
@@ -214,7 +292,7 @@ func (d *DB) AcquireClaim(req ClaimRequest) (*Claim, error) {
 	}
 	return &Claim{
 		ID: id, ScopePath: req.ScopePath, Recursive: req.Recursive, RootID: req.RootID,
-		Worktree: req.Worktree, Branch: req.Branch, Reason: req.Reason,
+		RepoID: req.RepoID, Worktree: req.Worktree, Branch: req.Branch, Reason: req.Reason,
 		CreatedAt: Stamp(now), ExpiresAt: Stamp(now.Add(ttl)), Own: true,
 	}, nil
 }

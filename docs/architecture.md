@@ -91,25 +91,58 @@ that a claim was actually *violated* (on Codex) rather than merely enforced.
 
 Two SQLite databases, both pure-Go (`modernc.org/sqlite`, no cgo, static binary).
 
-**Project DB** — `<git-common-dir>/stigmergy.sqlite3`.
+**Project DB** — `<git-common-dir>/stigmergy.sqlite3`, for a project that is one
+repository. Which is almost all of them, and nothing below changes for those.
 
 The *common* dir, not the worktree, and that choice carries real weight. Linked
 worktrees (`git worktree add`) all share one common dir, so they share one
 database: two agents in two worktrees of the same repository can see and block
 each other, which is exactly what you want, because they are working on the same
 codebase ([§5.2](#52-claims-are-repo-wide-not-worktree-scoped) explains why that is
-worth the false positives it costs). Separate clones have separate common dirs and
-stay fully isolated, which is also what you want, because they are not.
+worth the false positives it costs).
 
 A consequence worth stating outright, because it surprises people: the database is
 inside `.git/`. It is **not** committed, cloned, or pushed. Project memories are
 local to your machine. Sharing them across machines is a deliberate act, not a
 side effect of `git push`.
 
+**A project may span several repositories.** A client and its service, with
+separate remotes, whose changes cross between them are one piece of work even
+though git has no word for it. Those members share **one** database, kept outside
+all of them at `$XDG_DATA_HOME/stigmergy/projects/<project-id>/stigmergy.sqlite3`,
+and each member's git common dir holds a pointer file naming it:
+
+```json
+{"project": "p-3f2a9c81b4de7a05", "repo": "naviamp-sidecar", "created_at": "…"}
+```
+
+Three properties are load-bearing:
+
+- **Membership is stated, never inferred.** Resolution reads the pointer in the
+  repository's own common dir and stops. It does not walk up looking for a
+  project and does not consult siblings, so a stray file high in a directory tree
+  cannot quietly adopt everything beneath it. `stigmergy project add` is the only
+  thing that writes a pointer, and it refuses a repository that already has one.
+- **Members share no root.** They may sit under different parents, on different
+  filesystems. Antigravity mounts unrelated directories as one workspace
+  routinely, and the project id is opaque rather than derived from a path
+  precisely so nothing depends on where the repositories happen to live.
+- **No member is special.** The database is outside all of them, so removing one
+  repository does not strand the rest — which is also why the id is random rather
+  than "whichever repository was first".
+
+Separate clones that are *not* members of a common project still have separate
+databases and never see each other, exactly as before. What changed is that
+"separate clone" and "different project" are no longer the same statement.
+
 **Global DB** — `$XDG_DATA_HOME/stigmergy/global.sqlite3` (default
-`~/.local/share/stigmergy/global.sqlite3`, directory mode `0700`). Memories and an
-audit log only — no roots, claims, or mailbox, because coordination is inherently
-per-repository.
+`~/.local/share/stigmergy/global.sqlite3`, directory mode `0700`). Memories, an
+audit log, and `known_projects` — no roots, claims, or mailbox, because
+coordination is inherently per-project.
+
+`known_projects` is the registry of every project database this machine has been
+told about. It exists so `stigmergy doctor --all` can reach all of them at once;
+see [§5.9](#59-a-migration-blocks-every-adopted-project-at-once).
 
 ### Connection settings, and why
 
@@ -207,6 +240,7 @@ CREATE TABLE claims (
   scope_path  TEXT NOT NULL,   -- repo-relative POSIX; "." is the whole repo
   recursive   INTEGER NOT NULL CHECK (recursive IN (0,1)),
   root_id     TEXT NOT NULL REFERENCES roots(root_id),
+  repo_id     TEXT NOT NULL DEFAULT '',  -- 0007; which member. '' = the only one
   worktree    TEXT NOT NULL,
   branch      TEXT,
   reason      TEXT NOT NULL,   -- other agents read this when you block them
@@ -216,7 +250,32 @@ CREATE TABLE claims (
 );
 
 CREATE INDEX idx_claims_open ON claims(expires_at) WHERE released_at IS NULL;
+
+CREATE TABLE repos (            -- 0007; the project's member repositories
+  repo_id    TEXT PRIMARY KEY,      -- the name agents type in a "repo:path" scope
+  common_dir TEXT NOT NULL UNIQUE,  -- on THIS machine
+  worktree   TEXT NOT NULL,         -- on THIS machine
+  added_at   TEXT NOT NULL
+);
 ```
+
+`claims.repo_id` is the only place the repository dimension appears, and the
+absences are deliberate. `memories` does not get one because project-wide sharing
+is the *point* of a multi-repo project — and because `memories_fts` is an
+external-content index whose three triggers enumerate columns literally and whose
+`snippet()` addresses `body` by column *index*, so it is the table it is most
+expensive to be wrong about. `roots` does not get one because a root is an agent,
+not a directory ([§5.6](#56-root-registration-resumes)). The mailbox does not,
+because roots are project-wide. `audit_log` does not: `target` is free text, so
+spelling it `repo:path` makes the trail read correctly with no schema change.
+
+`''` is not a placeholder awaiting cleanup. It is the stored spelling of "the
+sole repository of a single-repo project", and every read maps it to whichever
+repository the database was opened from. That is what makes the upgrade safe: a
+v6 database migrated to v7 whose backfill has not run *still enforces its claims
+exactly as before*, so the window in which a project is broken by a new binary is
+the time it takes to install one, not the time it takes to get round to running
+`doctor` in it.
 
 `reason` is `NOT NULL` and rejected when empty for a human reason: a claim without
 a reason is a lock with no way to negotiate around it. The blocked agent is shown
@@ -361,10 +420,44 @@ release branch can be blocked by a refactor claim on `main`. The escape hatch is
 the negotiation path, which is the same one you would want anyway — the owner
 releases, narrows the claim, or tells the hotfixer what is changing under them.
 
-Separate *clones* are a different matter entirely: they have different git common
-dirs, so they have different databases and never see each other at all.
-
 Pinned by `TestClaimsBlockAcrossWorktrees`.
+
+#### Amended: the conflict test now compares the repository too
+
+The sentence that used to close this section — "separate *clones* have different
+databases and never see each other at all" — stopped being true when a project
+gained the ability to span repositories. Two members share one database, so the
+overlap test has to say which repository a path is in:
+
+```go
+func overlaps(a, b RepoScope) bool {
+    return sameRepo(a.Repo, b.Repo) && claims.Overlaps(a.Scope, b.Scope)
+}
+```
+
+This does **not** walk back the reasoning above, and the distinction is the whole
+point:
+
+- Two linked worktrees of one repository share a `repo_id`, so §5.2's behaviour is
+  preserved exactly and its test passes unchanged. A claim on `main` still blocks
+  a hotfix on a release branch, and it still should.
+- Two *members* are different codebases with different remotes. Without the
+  dimension, a claim on the client's `README.md` would block an agent editing the
+  service's — a false positive with no shared assumption behind it. §5.2 accepts
+  false positives that buy something; that one buys nothing.
+
+The repository dimension deliberately does **not** live in `internal/claims`.
+That package is pure path algebra, and a `Scope` with a repo field would have a
+zero value naming no repository — every construction site that forgot it would
+compare equal to every one that did, and the claim guard would fail *open* with
+no error anywhere. So it lives one level up in `store.RepoScope`, whose only two
+constructors take the repository and the path together, and `claims.Covers` —
+which built its operand from a partial literal — was **deleted** rather than
+extended. Forgetting the repository is now a compile error.
+
+An empty `repo_id` matches anything, which is correct for a single-repo project
+and fails *safe* in a multi-repo one: it blocks more rather than less. A false
+conflict costs one conversation; a missed one costs somebody's work.
 
 ### 5.3 Overlap is component-wise, never a string prefix
 
@@ -426,14 +519,30 @@ get two half-true memories instead of one true one.
 
 ### 5.6 Root registration *resumes*
 
-`RegisterRoot` matches an existing live root on `(agent_kind, worktree,
-session_label)` and returns it, same `root_id`, claims intact.
+`RegisterRoot` matches an existing live root on `(agent_kind, session_label)` and
+returns it, same `root_id`, claims intact.
 
 This is not an optimization. Hosts restart the MCP server process mid-session —
 Claude on `/clear`, Codex on compact. If each restart minted a fresh `root_id`, the
 previous root's claims would be **stranded**: live, owned by nobody reachable,
 unreleasable, and blocking every other agent in the repository until they timed
 out. Resume reconnects a session to the claims it already holds.
+
+**`worktree` used to be part of that key, and its removal fixed a bug that
+predates multi-repo.** `RootBySession` — the *read* path, the one the claim guard
+uses to decide whether a claim is your own — has always matched on `(agent_kind,
+session_label)` alone. Only the write path included `worktree`, so the two sides
+disagreed about what identifies a root: registering from a second worktree minted
+a second root for one session while the guard went on resolving whichever was
+most recent. The consequences all point the same way — the abandoned root goes
+silent, lapses at `RootTTL`, and [§5.1.1](#511-why-the-ttl-is-fifteen-minutes-and-what-it-costs)'s
+"coming back from the dead costs you your claims" then fires on a root that never
+went anywhere, while the agent, still working, believes it holds them.
+
+A root is an agent, not a directory. One host session is one root, wherever it
+happens to be standing. `worktree` is still recorded and still shown — it is what
+a blocked agent reads in a conflict — and a resume updates it, because a stale
+answer there is worse than none.
 
 An empty `session_label` cannot be matched, so it always mints a new root. Which
 leads directly to:
@@ -468,6 +577,30 @@ The claim guard does not have "a" failure mode. It has two, pointing opposite wa
 That second case is why `doctor` reports a broken project DB as "Every edit is
 currently BLOCKED".
 
+### 5.9 A migration blocks every adopted project at once
+
+The claim guard fails closed when a project database's schema version differs
+from the version compiled into the binary ([§5.8](#58-failure-directions-are-chosen-per-failure-not-globally)),
+while the MCP server migrates on open and does not version-gate. Both are right
+on their own. Together they mean that the moment a binary carrying a new
+migration lands on `PATH`, **every** adopted project on the machine blocks every
+edit — including the one you are standing in, and including the agents working in
+repositories you had forgotten were adopted.
+
+This has cost real work. The recovery used to be a manual walk: run `stigmergy
+doctor` in each project, from inside it, with nothing anywhere listing them.
+
+So the global database keeps `known_projects`, written whenever a project
+announces itself — `init`, `doctor`, `project create/add`, or an agent opening it
+over MCP — and `stigmergy doctor --all` opens and upgrades all of them in one
+pass. It is deliberately a record of projects that *said so*, never the result of
+scanning the filesystem for databases: a tool that went looking would eventually
+find one it should not have touched.
+
+The hook path never writes to it. Hooks run per-edit under a 250ms lock budget
+and open the project read-only; a registry write there would put a second
+database in the critical section of the thing §9 exists to keep fast.
+
 ---
 
 ## 6. Package map
@@ -480,6 +613,7 @@ currently BLOCKED".
 | `claims` | the overlap rule — pure functions, no I/O | the rule the whole enforcement layer rests on, so it must be testable with no database in sight (§5.3) |
 | `paths` | absolute/relative → repo-relative POSIX; symlinks; worktree-escape | agents write files that *don't exist yet*, so it resolves the deepest existing ancestor and re-appends the missing tail |
 | `gitx` | worktree root + git common dir, pure Go, with a subprocess fallback | the hook path uses the pure-Go path only — shelling out to `git` on every edit would blow the latency budget |
+| `project` | which project governs a directory, and which of its repositories a path is in | resolution runs on the hook path, so it is filesystem-only by construction: one `gitx` walk and one small file read, no subprocess and no query |
 | `mcpserver` | the MCP server: session state machine, 21 tools, instructions | |
 | `hooks` | the host hook protocols and the shared `Guard` fast path | Claude and Codex differ in *protocol*, not in *decision* — one guard, two renderings |
 | `hostcfg` | writing/removing host config, idempotently, without clobbering | merging into someone else's config file is fiddly and deserves its own tests |
@@ -490,6 +624,8 @@ currently BLOCKED".
 
 Two structural rules worth preserving: `cli` stays thin (cobra wiring only — logic
 lives in the packages it calls), and `claims` never grows a database dependency.
+A third, newer: `project.Resolve` never grows a subprocess or a query — §9 is why,
+and `TestResolveNeverSpawnsASubprocess` is what notices.
 
 ---
 
@@ -564,6 +700,10 @@ around it:
   time for a lock is itself the failure
 - audit writes get a 100ms budget and are abandoned if they exceed it — an audit
   record must never be able to flip or delay a decision
+- resolving which project governs a directory is a `gitx` walk plus one ~100-byte
+  file read. The member roster costs one query on a connection that is being
+  opened anyway. Measured after multi-repo landed: ~19ms mean end to end,
+  unchanged
 
 Measured: ~17ms median, ~19ms p95, and that includes the test harness's own
 subprocess overhead, so the real figure is lower.

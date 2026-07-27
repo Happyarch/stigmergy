@@ -12,25 +12,134 @@ import (
 	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/hostcfg"
 	"github.com/happyarch/stigmergy/internal/hosts"
+	"github.com/happyarch/stigmergy/internal/project"
 	"github.com/happyarch/stigmergy/internal/store"
 	"github.com/happyarch/stigmergy/internal/xdg"
 )
 
 func newDoctorCmd() *cobra.Command {
 	var gc bool
+	var all bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose the stigmergy installation and this project",
 		Long: "Check that stigmergy is installed, that this project is configured, and that the\n" +
-			"databases are readable. Run this first whenever something is not working.",
+			"databases are readable. Run this first whenever something is not working.\n\n" +
+			"With --all, check and upgrade every project this machine knows about instead of\n" +
+			"just this one. Run it immediately after installing a stigmergy that carries a new\n" +
+			"migration: until a project's database is upgraded, its claim-guard hook fails\n" +
+			"closed and every edit in it is blocked.",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if all {
+				return runDoctorAll(cmd.OutOrStdout(), gc)
+			}
 			return runDoctor(cmd.OutOrStdout(), gc)
 		},
 	}
 	cmd.Flags().BoolVar(&gc, "gc", false, "also prune old audit records and resolved mail")
+	cmd.Flags().BoolVar(&all, "all", false, "check and upgrade every known project, not just this one")
 	return cmd
+}
+
+// runDoctorAll upgrades every project the machine knows about, in one pass.
+//
+// This is the answer to the migration hazard described in the 0002 global
+// migration: a new binary makes every out-of-date project fail closed at once,
+// and the recovery used to be a manual walk through repositories that nothing
+// listed. Here the whole sweep is one command, and it reports what it changed.
+//
+// It opens each project read-write, which is what applies the migration — the
+// same thing a plain `doctor` does for the project it is standing in.
+func runDoctorAll(out io.Writer, gc bool) error {
+	d := &diag{out: out}
+
+	globalPath, err := xdg.GlobalDBPath()
+	if err != nil {
+		d.fail("the global database path could not be resolved: %v", err)
+		return finish(d, false, nil)
+	}
+	global, err := store.OpenGlobal(globalPath)
+	if err != nil {
+		d.fail("the global database could not be opened: %v", err)
+		return finish(d, false, nil)
+	}
+	defer global.Close()
+
+	projects, err := global.KnownProjects()
+	if err != nil {
+		d.fail("the project registry could not be read: %v", err)
+		return finish(d, false, nil)
+	}
+
+	latest, _ := store.LatestVersion(store.Project)
+	fmt.Fprintf(out, "Known projects (%d) — this stigmergy expects schema v%d\n", len(projects), latest)
+	if len(projects) == 0 {
+		d.warn("no projects are registered yet")
+		d.note("A project registers itself when you run `stigmergy init` or `stigmergy doctor`")
+		d.note("inside it, or when an agent opens it. Run `stigmergy doctor` once in each")
+		d.note("project you already use, and they will be covered from then on.")
+		return finish(d, false, nil)
+	}
+
+	var upgraded, missing int
+	for _, kp := range projects {
+		if _, err := os.Stat(kp.DBPath); err != nil {
+			// A deleted clone is the ordinary case here, not a fault: say so, and
+			// leave the row alone. Reaping it automatically would silently drop a
+			// project that is merely on an unmounted disk.
+			missing++
+			d.warn("%s — database is gone (%s)", kp.Label, kp.DBPath)
+			continue
+		}
+		before, err := projectSchemaVersion(kp.DBPath)
+		if err != nil {
+			d.fail("%s — could not be read: %v", kp.Label, err)
+			continue
+		}
+		p, err := store.OpenProjectAt(kp.DBPath)
+		if err != nil {
+			d.fail("%s — could not be upgraded: %v", kp.Label, err)
+			d.note("Every edit in this project is BLOCKED until this is fixed.")
+			continue
+		}
+		after, _ := p.SchemaVersion()
+		if gc {
+			_, _ = p.ReapStaleRoots()
+			_, _, _ = p.GC()
+		}
+		p.Close()
+
+		switch {
+		case after != latest:
+			d.fail("%s — schema v%d, but this stigmergy expects v%d", kp.Label, after, latest)
+			d.note("A newer stigmergy wrote this database. Upgrade, or edits stay blocked.")
+		case before != after:
+			upgraded++
+			d.pass("%s — upgraded v%d to v%d", kp.Label, before, after)
+		default:
+			d.pass("%s — schema v%d", kp.Label, after)
+		}
+	}
+
+	fmt.Fprintln(out)
+	d.note("%d project(s) upgraded, %d missing, %d checked", upgraded, missing, len(projects))
+	return finish(d, false, nil)
+}
+
+// projectSchemaVersion reads a project's schema version without migrating it, so
+// the sweep can report what it actually changed rather than only where it ended
+// up. NoMigrate rather than ReadOnly: a read-only open cannot see WAL frames
+// that have not been checkpointed, and reporting a stale version here would
+// invent upgrades that never happened.
+func projectSchemaVersion(dbPath string) (int, error) {
+	p, err := store.OpenProjectAt(dbPath, store.NoMigrate())
+	if err != nil {
+		return 0, err
+	}
+	defer p.Close()
+	return p.SchemaVersion()
 }
 
 type diag struct {
@@ -77,6 +186,8 @@ func runDoctor(out io.Writer, gc bool) error {
 	}
 
 	fmt.Fprintln(out, "\nGlobal memory")
+	// Held past this block so the project section can register itself below.
+	var global *store.DB
 	globalPath, err := xdg.GlobalDBPath()
 	if err != nil {
 		d.fail("the global database path could not be resolved: %v", err)
@@ -84,6 +195,7 @@ func runDoctor(out io.Writer, gc bool) error {
 		d.fail("the global database could not be opened: %v", err)
 	} else {
 		defer g.Close()
+		global = g
 		v, _ := g.SchemaVersion()
 		d.pass("global database: %s (schema v%d)", g.Path, v)
 		if err := g.ProbeFTS5(); err != nil {
@@ -107,13 +219,36 @@ func runDoctor(out io.Writer, gc bool) error {
 	d.pass("worktree: %s", repo.WorktreeRoot)
 	d.note("shared database dir: %s", repo.CommonDir)
 
-	dbPath := store.ProjectDBPath(repo.CommonDir)
-	if _, err := os.Stat(dbPath); err != nil {
+	proj, err := project.ResolveWithFallback(cwd)
+	if err != nil {
+		d.fail("this repository's project could not be resolved: %v", err)
+		return finish(d, gc, nil)
+	}
+	dbPath := proj.DBPath
+	if !proj.Adopted() {
+		if proj.MultiRepo() {
+			d.fail("this repository points at project %s, whose database is missing (%s)",
+				proj.ID, dbPath)
+			d.note("Every edit here is BLOCKED: the claim guard fails closed when it cannot")
+			d.note("verify claims. Restore the database, or remove the pointer at %s",
+				project.PointerPath(repo.CommonDir))
+			return finish(d, gc, nil)
+		}
 		d.warn("stigmergy is not enabled here — run `stigmergy init` to enable it")
 		return finish(d, gc, nil)
 	}
+	if proj.MultiRepo() {
+		d.pass("project %s (shared by several repositories)", proj.ID)
+		// A stray per-repository database beside a pointer is the exact state the
+		// init guard exists to prevent, so say so if one turns up anyway.
+		if _, err := os.Stat(store.ProjectDBPath(repo.CommonDir)); err == nil {
+			d.warn("a stray per-repository database sits beside the pointer: %s",
+				store.ProjectDBPath(repo.CommonDir))
+			d.note("It is NOT the one in use and nothing reads it. Move it aside to avoid confusion.")
+		}
+	}
 
-	p, err := store.OpenProject(repo.CommonDir)
+	p, err := store.OpenProjectAt(dbPath)
 	if err != nil {
 		d.fail("the project database could not be opened: %v", err)
 		d.note("Every edit is currently BLOCKED in Claude Code: the claim guard fails closed")
@@ -121,6 +256,28 @@ func runDoctor(out io.Writer, gc bool) error {
 		return finish(d, gc, nil)
 	}
 	defer p.Close()
+
+	// Adopt any claim still carrying the pre-0007 empty repo id, and make sure
+	// this repository has a row of its own. Doctor is one of the few places that
+	// may write schema-shaped data, and it is where an already-adopted project
+	// picks this up without anyone having to re-run init.
+	// Single-repository projects only — see EnsureSelfRepo. A member of a
+	// multi-repo project is already registered, and running it there would
+	// re-attribute any legacy claim to whichever member doctor was run from.
+	if !proj.MultiRepo() {
+		if err := p.EnsureSelfRepo(project.SlugFor(repo.WorktreeRoot), repo.CommonDir, repo.WorktreeRoot); err != nil {
+			d.warn("this repository could not be recorded: %v", err)
+		}
+	}
+
+	// Running doctor here is proof this project is real and in use, so record it.
+	// Best-effort: a registry write must never turn a diagnostic into a failure.
+	if global != nil {
+		if err := global.RememberProject(p.Path, p.Label(repo.WorktreeRoot)); err != nil {
+			d.warn("this project could not be added to the registry: %v", err)
+			d.note("`stigmergy doctor --all` will not reach it until this succeeds.")
+		}
+	}
 
 	v, _ := p.SchemaVersion()
 	latest, _ := store.LatestVersion(store.Project)
@@ -139,7 +296,7 @@ func runDoctor(out io.Writer, gc bool) error {
 		} else {
 			d.pass("%d active claim(s):", len(active))
 			for _, c := range active {
-				scope := c.ScopePath
+				scope := c.Qualified()
 				if c.Recursive {
 					scope += "/**"
 				}
@@ -148,7 +305,43 @@ func runDoctor(out io.Writer, gc bool) error {
 		}
 	}
 
-	checkHostConfig(d, repo.WorktreeRoot)
+	// The member table, and a host check per member.
+	//
+	// Checking only the repository you happen to be standing in is how a project
+	// ends up half-wired: one member coordinating, another silently not, and no
+	// way to tell from inside the working one.
+	if err := proj.Load(p); err != nil {
+		d.warn("the project's repositories could not be read: %v", err)
+	}
+	if len(proj.Members) > 1 {
+		d.pass("%d repositories in this project:", len(proj.Members))
+		for _, m := range proj.Members {
+			here := ""
+			if m.ID == proj.SelfID {
+				here = "  <- you are here"
+			}
+			if _, err := os.Stat(m.WorktreeRoot); err != nil {
+				d.fail("  %-22s %s  MISSING", m.ID, m.WorktreeRoot)
+				d.note("  Its claims cannot be resolved. Restore it, or")
+				d.note("  `stigmergy project remove %s` to release them.", m.ID)
+				continue
+			}
+			d.note("  %-22s %s%s", m.ID, m.WorktreeRoot, here)
+		}
+		// The pointer and the roster have to agree, or a claim is attributed to a
+		// repository that does not exist as far as the database is concerned.
+		if proj.SelfID != "" && proj.Member(proj.SelfID) == nil {
+			d.fail("this repository calls itself %q, which the project does not list", proj.SelfID)
+			d.note("Re-add it: `stigmergy project add %s`", repo.WorktreeRoot)
+		}
+		anyCodex := false
+		for _, m := range proj.Members {
+			anyCodex = checkHostConfig(d, m.ID+": ", m.WorktreeRoot) || anyCodex
+		}
+		codexTrustNote(d, anyCodex)
+	} else {
+		codexTrustNote(d, checkHostConfig(d, "", repo.WorktreeRoot))
+	}
 
 	fmt.Fprintln(out, "\nScope")
 	d.warn("stigmergy is cooperative, not a security boundary")
@@ -159,10 +352,27 @@ func runDoctor(out io.Writer, gc bool) error {
 	return finish(d, gc, p)
 }
 
+// codexTrustNote says the one thing about Codex that is true of the run rather
+// than of a repository, and says it at most once.
+//
+// It used to be printed from inside checkHostConfig under `label == ""`, which is
+// only ever true in the single-repository branch — so no multi-repo project ever
+// saw it, however many of its members were wired for Codex.
+func codexTrustNote(d *diag, codex bool) {
+	if !codex {
+		return
+	}
+	d.note("Codex loads project hooks only for TRUSTED projects: trust this project in Codex")
+	d.note("and review the hooks with /hooks, or none of this takes effect there.")
+}
+
 // checkHostConfig verifies the project is actually wired up. A database with no
 // host configuration is the quiet failure mode: everything looks fine, and no
 // agent is ever told stigmergy exists.
-func checkHostConfig(d *diag, worktree string) {
+//
+// It reports whether Codex is configured here, for the once-per-run note its
+// caller prints.
+func checkHostConfig(d *diag, label, worktree string) bool {
 	mcpPath, settingsPath, claudeMemory := hostcfg.ClaudePaths(worktree)
 	codexConfig, codexHooks, codexMemory := hostcfg.CodexPaths(worktree)
 
@@ -196,18 +406,23 @@ func checkHostConfig(d *diag, worktree string) {
 		}
 	}
 
+	// Every line is prefixed with which repository it is about, once a project
+	// has more than one. Without it a two-member project printed two identical
+	// verdicts, and a project with one member misconfigured printed a PASS and a
+	// FAIL with nothing saying which was which.
 	switch len(configured) {
 	case 0:
-		d.fail("no host is configured — the database exists but no agent will use it")
-		d.note("Run `stigmergy init`.")
+		d.fail("%sno host is configured — the database exists but no agent will use it", label)
+		d.note("Run `stigmergy init` in %s.", worktree)
 	case 1:
-		d.pass("%s is configured", configured[0])
+		d.pass("%s%s is configured", label, configured[0])
 	default:
-		d.pass("%s are configured", joinWords(configured))
+		d.pass("%s%s are configured", label, joinWords(configured))
 	}
 	for _, h := range hosts.All() {
 		if !detected[h.Kind] && len(configured) > 0 {
-			d.warn("%s is not configured here — run `stigmergy init --host %s` if you use it", h.Name, h.Flag)
+			d.warn("%s%s is not configured — run `stigmergy init --host %s` there if you use it",
+				label, h.Name, h.Flag)
 		}
 	}
 
@@ -238,10 +453,7 @@ func checkHostConfig(d *diag, worktree string) {
 		d.note("worth keeping (`stigmergy import claude-memory`), then re-run `stigmergy init`,")
 		d.note("which sets \"autoMemoryEnabled\": false in .claude/settings.json.")
 	}
-	if codex {
-		d.note("Codex loads project hooks only for TRUSTED projects: trust this project in Codex")
-		d.note("and review the hooks with /hooks, or none of this takes effect there.")
-	}
+	return codex
 }
 
 // autoMemoryDisabled reports whether Claude Code's native memory is switched off

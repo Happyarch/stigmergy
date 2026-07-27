@@ -382,3 +382,36 @@ appear**. Try fewer words. If search fails entirely with `unsupported_search`, r
 
 The audit log records it, kept 90 days. It is a table (`audit_log`) in the project
 database; there is no CLI reporting for it yet — query the SQLite file directly.
+
+## Several repositories, one project
+
+Most projects are one repository and need none of this. When several are one
+piece of work — a client and its service, with separate remotes, whose changes
+cross between them — group them:
+
+```
+stigmergy project create --add ./naviamp --add ./naviamp-sidecar --name naviamp
+```
+
+They share one database, so memories, the roster and the mailbox reach across all
+of them, and a claim in one blocks an agent editing it from another. Scopes are
+spelled `repo:path`; a bare path means the repository you are in.
+
+The repositories need share no parent directory and may sit on different disks.
+
+```
+stigmergy project list          every project on this machine
+stigmergy project add <path>    add a repository to the project you are in
+stigmergy project remove <r>    drop one; its claims are released
+```
+
+## After upgrading stigmergy
+
+```
+stigmergy doctor --all
+```
+
+A new binary carrying a schema migration blocks edits in every adopted project
+until each database is upgraded — the claim guard fails closed when it cannot
+verify claims. `--all` upgrades every project this machine knows about in one
+pass. Run it immediately after installing.

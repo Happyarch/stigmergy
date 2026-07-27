@@ -46,7 +46,20 @@ func covers(dir, path string) bool {
 	return strings.HasPrefix(path, dir+"/")
 }
 
-// Covers reports whether a scope governs a specific file path.
-func Covers(s Scope, path string) bool {
-	return Overlaps(s, Scope{Path: path})
-}
+// There is deliberately no Covers(s Scope, path string) helper here any more.
+//
+// It used to exist, and it built its second operand as Scope{Path: path} — a
+// literal with one field named and the rest left at their zero values. That
+// shape is harmless while a Scope is only a path and a flag. It becomes a trap
+// the moment a claim needs to know anything else about where it lives: the new
+// field defaults to zero, the comparison quietly succeeds against every claim
+// carrying a real one, and the claim guard fails OPEN with no error anywhere.
+//
+// A project can now span several repositories, so a path alone no longer
+// identifies a file. Rather than add a field here and trust every construction
+// site to remember it, that notion lives one level up in store.RepoScope, whose
+// only constructors take the repository and the path together. What would have
+// been a silent default is a compile error instead.
+//
+// This package stays what it was: pure path algebra, no database, no I/O — and
+// its tests should not need to change when the layer above it does.

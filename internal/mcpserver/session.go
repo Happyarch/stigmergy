@@ -7,9 +7,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/hosts"
 	"github.com/happyarch/stigmergy/internal/ids"
+	"github.com/happyarch/stigmergy/internal/project"
 	"github.com/happyarch/stigmergy/internal/serr"
 	"github.com/happyarch/stigmergy/internal/store"
 )
@@ -28,14 +28,53 @@ const (
 // mcp` process, but handlers can still be called concurrently, so everything
 // goes through the mutex.
 type Session struct {
-	mu      sync.Mutex
-	state   State
-	repo    *gitx.Repo
+	mu    sync.Mutex
+	state State
+	// proj is which project is open and which repositories it spans. One
+	// project, one database — that is the whole payoff of the shared-DB design,
+	// and it is why a session that moves between sibling repositories no longer
+	// has to close and reopen anything.
+	proj    *project.Project
 	project *store.DB
 	global  *store.DB
 	root    *store.Root
 
 	globalPath string
+}
+
+// selfRepo is the member the session opened from, or "" in a single-repository
+// project, where naming the only repository there is would be noise.
+func (s *Session) selfRepo() string {
+	if s.proj == nil {
+		return ""
+	}
+	return s.proj.SelfID
+}
+
+// memberIDs is the roster, for parsing and for error messages that have to say
+// what the valid answers were.
+func (s *Session) memberIDs() []string {
+	if s.proj == nil {
+		return nil
+	}
+	return s.proj.MemberIDs()
+}
+
+// worktree is the resolved member's worktree root.
+func (s *Session) worktree() string {
+	if s.proj == nil || s.proj.Repo == nil {
+		return ""
+	}
+	return s.proj.Repo.WorktreeRoot
+}
+
+// commonDir is the git common dir of the repository the session opened from.
+// Audit detail only — it records where a promoted memory came from.
+func (s *Session) commonDir() string {
+	if s.proj == nil || s.proj.Repo == nil {
+		return ""
+	}
+	return s.proj.Repo.CommonDir
 }
 
 // NewSession builds an unopened session bound to a global DB path.
@@ -62,12 +101,12 @@ func (s *Session) bootstrapFromEnv() {
 	if !ok || projectDir == "" {
 		return
 	}
-	repo, err := gitx.Resolve(projectDir)
+	proj, err := project.Resolve(projectDir)
 	if err != nil {
-		return
+		return // not a repository, or stigmergy is not enabled here.
 	}
-	if _, err := os.Stat(store.ProjectDBPath(repo.CommonDir)); err != nil {
-		return // stigmergy is not enabled here; do not create a database.
+	if _, err := os.Stat(proj.DBPath); err != nil {
+		return // do not create a database from a bootstrap path.
 	}
 
 	s.mu.Lock()
@@ -76,27 +115,31 @@ func (s *Session) bootstrapFromEnv() {
 		return // The agent already opened it explicitly; do not fight that.
 	}
 
-	project, err := store.OpenProject(repo.CommonDir)
+	db, err := store.OpenProjectAt(proj.DBPath)
 	if err != nil {
+		return
+	}
+	if err := proj.Load(db); err != nil {
+		db.Close()
 		return
 	}
 	global, err := store.OpenGlobal(s.globalPath)
 	if err != nil {
-		project.Close()
+		db.Close()
 		return
 	}
 	// Model is left empty: the environment carries the harness, never the model,
 	// and the agent can fill it later with root_register if it wants a roster
-	// line. Everything else resumes on (agent_kind, worktree, session_label), so a
-	// server restarted on /clear reconnects to the same root and its claims.
-	root, _, err := project.RegisterRoot(store.Registration{
+	// line. Everything else resumes on (agent_kind, session_label), so a server
+	// restarted on /clear reconnects to the same root and its claims.
+	root, _, err := db.RegisterRoot(store.Registration{
 		RootID:       ids.NewRootID(),
 		AgentKind:    host.Kind,
-		Worktree:     repo.WorktreeRoot,
+		Worktree:     proj.Repo.WorktreeRoot,
 		SessionLabel: sessionID,
 	})
 	if err != nil {
-		project.Close()
+		db.Close()
 		global.Close()
 		return
 	}
@@ -107,9 +150,10 @@ func (s *Session) bootstrapFromEnv() {
 	if s.global != nil {
 		s.global.Close()
 	}
-	s.repo, s.project, s.global = repo, project, global
+	s.proj, s.project, s.global = proj, db, global
 	s.root, s.state = root, Registered
-	_, _ = project.ReapStaleRoots()
+	_, _ = db.ReapStaleRoots()
+	_ = global.RememberProject(db.Path, db.Label(proj.Repo.WorktreeRoot))
 }
 
 // Close releases both databases.

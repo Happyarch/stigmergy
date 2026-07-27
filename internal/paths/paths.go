@@ -8,8 +8,10 @@ package paths
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -83,6 +85,64 @@ func resolveExisting(path string) (string, error) {
 		}
 		cur = parent
 	}
+}
+
+// ParseScope splits a claim scope into the repository it names and the path
+// inside it.
+//
+// A project may span several git repositories, so a bare path no longer
+// identifies a file: "README.md" exists in every one of them. The spelling is
+// "repo:path" — and it is a spelling rather than a second argument because the
+// same string has to come back OUT of stigmergy too, in conflict messages, the
+// roster, the audit trail and the hook's denial text. One notation, written and
+// read the same way, beats an input field paired with a different output format.
+//
+// The ':' is not ambiguous in practice, and the rule is what makes that true:
+// split on the FIRST colon, and treat the head as a repository only if it is
+// actually a member. Anything else is a path in its entirety. So a file called
+// "weird:name.go" still works, because there is no repository called "weird" —
+// and the only way to collide is to have a path component that is exactly a
+// member's name followed by a colon, in a project that has that member.
+//
+// members is the roster; self is the repository to assume when none is named,
+// which is the one the agent opened. An empty self is the single-repository
+// project, where there is nothing to name and nothing to disambiguate.
+func ParseScope(spec string, members []string, self string) (repoID, scope string, err error) {
+	if spec == "" {
+		return "", "", errors.New("scope_path must not be empty; use \".\" for the whole repository")
+	}
+	repoID = self
+	if head, tail, found := strings.Cut(spec, ":"); found && slices.Contains(members, head) {
+		if tail == "" {
+			return "", "", fmt.Errorf("scope_path %q names repository %q but no path in it; use %q for the whole repository",
+				spec, head, head+":.")
+		}
+		repoID, spec = head, tail
+	}
+	scope, err = ValidateScope(spec)
+	if err != nil {
+		return "", "", err
+	}
+	return repoID, scope, nil
+}
+
+// UnknownRepoHint explains a scope whose prefix looks like it meant to name a
+// repository but did not match one.
+//
+// This exists because the failure is otherwise silent and wrong in the worst
+// way: "sidecar:src/main.go" with the member actually called "naviamp-sidecar"
+// parses as a PATH called "sidecar:src/main.go", the claim succeeds, and it
+// guards a file that does not exist while the real one stays unprotected.
+// Nothing errors. So when a scope contains a colon and the head is not a member,
+// say so — the agent gets to notice before the claim is useless.
+func UnknownRepoHint(spec string, members []string) string {
+	head, _, found := strings.Cut(spec, ":")
+	if !found || slices.Contains(members, head) || len(members) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("note: %q is not a repository in this project (%s), "+
+		"so this was read as a path called %q. If you meant a repository, spell it exactly.",
+		head, strings.Join(members, ", "), spec)
 }
 
 // ValidateScope checks a claim scope as an agent supplied it: repo-relative,

@@ -228,3 +228,25 @@ inode, and the next session picks up the new file.
 Restart agent sessions afterwards. A session's MCP server is the binary it was launched
 with: until it restarts, that session keeps the old tool set and the old constants, even
 though its hooks (which are fresh processes each time) already have the new ones.
+
+## Upgrading the binary
+
+The claim guard fails closed when a project's schema version differs from the
+binary's, and the MCP server migrates on open without version-gating. So the
+moment a binary carrying a migration lands on PATH, every adopted project on the
+machine blocks every edit — including repositories you had forgotten were
+adopted, whose agents have no idea why they suddenly cannot edit anything.
+
+1. Quiesce: no agent mid-edit in any adopted project.
+2. `mv $(which stigmergy) /tmp/stigmergy.old && cp ./stigmergy $(which stigmergy)`
+   — the `mv` aside is required, because a running MCP server holds the old inode
+   and a straight copy gives `Text file busy`.
+3. **Immediately** `stigmergy doctor --all`. Every project is fail-closed until
+   this returns.
+4. Restart running MCP servers: they keep the old tools and constants until their
+   session ends, even though the hooks — fresh processes each time — already have
+   the new ones.
+
+`stigmergy project list` shows what `--all` will reach. A project registers
+itself on `init`, `doctor`, `project create/add`, or the first time an agent opens
+it; nothing scans the filesystem for databases.

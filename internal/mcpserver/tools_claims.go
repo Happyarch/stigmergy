@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"path/filepath"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -13,7 +14,7 @@ import (
 
 // ClaimAcquireInput reserves a path.
 type ClaimAcquireInput struct {
-	ScopePath  string `json:"scope_path" jsonschema:"path relative to the repository root; \".\" is the whole repo"`
+	ScopePath  string `json:"scope_path" jsonschema:"path relative to the repository root; \".\" is the whole repo. In a project spanning several repositories, \"repo:path\" names one of them (context_open lists them); a bare path means the repository you opened"`
 	Recursive  bool   `json:"recursive,omitempty" jsonschema:"true to claim a directory and everything under it"`
 	Reason     string `json:"reason" jsonschema:"what you are doing; other agents read this when your claim blocks them"`
 	TTLSeconds int    `json:"ttl_seconds,omitempty" jsonschema:"how long you need it (60-86400; default 1800)"`
@@ -30,9 +31,16 @@ func (s *Session) claimAcquire(_ context.Context, _ *mcp.CallToolRequest, in Cla
 	if err := s.requireRegistered(); err != nil {
 		return nil, ClaimOutput{}, toolError(err)
 	}
-	scope, err := paths.ValidateScope(in.ScopePath)
+	repoID, scope, err := paths.ParseScope(in.ScopePath, s.memberIDs(), s.selfRepo())
 	if err != nil {
 		return nil, ClaimOutput{}, toolError(serr.E(serr.InvalidInput, "%s", err.Error()))
+	}
+	// A colon whose head is not a member parses as a path, silently and
+	// plausibly — "sidecar:src/x.go" when the member is "naviamp-sidecar" would
+	// claim a file that does not exist while the real one stayed unguarded. So
+	// refuse it rather than take a claim nobody benefits from.
+	if hint := paths.UnknownRepoHint(in.ScopePath, s.memberIDs()); hint != "" {
+		return nil, ClaimOutput{}, toolError(serr.E(serr.InvalidInput, "%s", hint))
 	}
 	// The repo root is only meaningful as a subtree: a non-recursive claim on
 	// "." would name a directory as if it were a file, and match no edit.
@@ -41,7 +49,7 @@ func (s *Session) claimAcquire(_ context.Context, _ *mcp.CallToolRequest, in Cla
 	}
 
 	claim, err := s.project.AcquireClaim(store.ClaimRequest{
-		ScopePath: scope, Recursive: in.Recursive, RootID: s.actor(),
+		ScopePath: scope, Recursive: in.Recursive, RootID: s.actor(), RepoID: repoID,
 		Worktree: s.root.Worktree, Branch: s.root.Branch,
 		Reason: in.Reason, TTLSeconds: in.TTLSeconds,
 	})
@@ -71,22 +79,55 @@ func (s *Session) claimCheck(_ context.Context, _ *mcp.CallToolRequest, in Claim
 	if err := s.requireOpened(); err != nil {
 		return nil, ClaimCheckOutput{}, toolError(err)
 	}
-	rel, err := paths.Normalize(s.repo.WorktreeRoot, s.repo.WorktreeRoot, in.Path)
+	// Three spellings all have to work here, because an agent asking "is this
+	// claimed?" has a path in whatever form it happens to hold: an absolute path
+	// anywhere in the project, a path relative to its own repository, or the
+	// explicit "repo:path".
+	repoID, rel, err := s.resolveCheckPath(in.Path)
 	if errors.Is(err, paths.ErrOutsideWorktree) {
-		// Claims only govern the repository. Outside it, there is nothing to
-		// report and nothing to block.
+		// Claims govern the project's repositories. Outside all of them there is
+		// nothing to report and nothing to block.
 		return nil, ClaimCheckOutput{Path: in.Path, Claimed: false}, nil
 	}
 	if err != nil {
 		return nil, ClaimCheckOutput{}, toolError(serr.E(serr.InvalidInput, "%s", err.Error()))
 	}
 
-	found, err := s.project.ClaimsCovering(rel, s.actor())
+	found, err := s.project.ClaimsCovering(repoID, rel, s.actor())
 	if err != nil {
 		return nil, ClaimCheckOutput{}, toolError(err)
 	}
 	s.touch()
-	return nil, ClaimCheckOutput{Path: rel, Claimed: len(found) > 0, Claims: found}, nil
+	return nil, ClaimCheckOutput{
+		Path: store.QualifyScope(repoID, rel), Claimed: len(found) > 0, Claims: found,
+	}, nil
+}
+
+// resolveCheckPath maps whatever an agent passed to claim_check onto a member
+// repository and a path inside it.
+func (s *Session) resolveCheckPath(p string) (repoID, rel string, err error) {
+	// An absolute path decides for itself which repository it is in — the same
+	// rule the claim guard uses, and for the same reason: where the agent opened
+	// the project says nothing about where a file lives.
+	if filepath.IsAbs(p) {
+		if m := s.proj.Containing(filepath.Clean(p)); m != nil {
+			rel, err := paths.Normalize(m.WorktreeRoot, m.WorktreeRoot, p)
+			return m.ID, rel, err
+		}
+		return "", "", paths.ErrOutsideWorktree
+	}
+
+	// Relative: either "repo:path", or a path in the repository the agent opened.
+	repoID, scope, err := paths.ParseScope(p, s.memberIDs(), s.selfRepo())
+	if err != nil {
+		return "", "", err
+	}
+	root := s.worktree()
+	if m := s.proj.Member(repoID); m != nil {
+		root = m.WorktreeRoot
+	}
+	rel, err = paths.Normalize(root, root, scope)
+	return repoID, rel, err
 }
 
 // ClaimListOutput lists every claim in force.

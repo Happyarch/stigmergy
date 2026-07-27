@@ -19,3 +19,23 @@ func NewRootID() string {
 	}
 	return "r-" + hex.EncodeToString(b[:])
 }
+
+// NewProjectID returns an identifier like "p-3f2a9c81b4de7a05".
+//
+// Opaque on purpose: not a slug, not a path, and not derived from where the
+// repositories happen to sit. It names the directory a multi-repo project's
+// shared state lives in, and every member points at it, so it has to stay valid
+// when a repository is renamed, moved, or checked out beside somebody else's
+// project of the same name.
+//
+// Deriving it from a common parent directory would have been the obvious
+// shortcut and is wrong: a project's repositories need share no root at all.
+// Antigravity mounts unrelated directories as one workspace routinely, and two
+// clones can live on different filesystems entirely.
+func NewProjectID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("ids: system CSPRNG unavailable: " + err.Error())
+	}
+	return "p-" + hex.EncodeToString(b[:])
+}

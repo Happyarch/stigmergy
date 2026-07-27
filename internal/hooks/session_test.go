@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -61,5 +62,24 @@ func TestSessionStartAsksToRegisterWithoutHostSession(t *testing.T) {
 	}
 	if !strings.Contains(text, "root_register(") {
 		t.Errorf("the registration call was not spelled out:\n%s", text)
+	}
+}
+
+// The hooks are installed user-wide, so this function runs in every repository
+// an agent wanders into. It has to be silent in the ones that never enabled
+// stigmergy: the instructions would name a project that does not exist, and
+// telling an agent to context_open something that was never adopted is worse
+// than noise. A refactor once dropped the adoption check, and every git repo on
+// the machine started being told about stigmergy.
+func TestSessionStartIsSilentWhereStigmergyWasNeverEnabled(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	worktree := t.TempDir()
+	if out, err := exec.Command("git", "-C", worktree, "init", "-b", "main").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	if got := SessionStartText("claude-code", "sess-abc", worktree); got != "" {
+		t.Errorf("a repository with no stigmergy database was given the on-ramp anyway:\n%s", got)
 	}
 }

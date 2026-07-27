@@ -43,22 +43,31 @@ func newAntigravityClaimGuardCmd() *cobra.Command {
 				return nil
 			}
 
-			// The workspace that holds the file being edited, which is not
-			// necessarily the first one mounted: Antigravity reports every
-			// workspace the user has open, and the repository this edit belongs
-			// to is the one containing the path we are about to guard.
+			// Antigravity reports every workspace the user has open, and two of
+			// them can belong to different projects with different databases. So
+			// each edit is guarded against the workspace that actually contains
+			// it — not against whichever was mounted first, and not, as this used
+			// to do, against the workspace holding edits[0], which was correct
+			// only while every edit in one call shared a repository.
 			edits := in.EditedPaths()
-			cwd := in.CWD()
-			if len(edits) > 0 {
-				cwd = in.CWDFor(edits[0])
-			}
 
 			// An edit is the clearest proof of life there is. Heartbeating
 			// here keeps the root alive with a short TTL even during long
 			// stretches of editing without explicit MCP calls.
-			hooks.Heartbeat("antigravity", in.ConversationID, cwd)
+			//
+			// Once per workspace, for the same reason the guard below is: a
+			// root is registered per project, and an agent editing in two of
+			// them is alive in both. Heartbeating only edits[0]'s workspace
+			// let the other root time out mid-edit and drop its claims.
+			workspaces := hooks.Workspaces(in.CWDFor, edits)
+			if len(workspaces) == 0 {
+				workspaces = []string{in.CWD()}
+			}
+			for _, ws := range workspaces {
+				hooks.Heartbeat("antigravity", in.ConversationID, ws)
+			}
 
-			d := hooks.Guard("antigravity", in.ConversationID, cwd, edits)
+			d := hooks.GuardWorkspaces("antigravity", in.ConversationID, in.CWDFor, edits)
 			if d.Allow {
 				// Say nothing, cost nothing. Antigravity documents `decision`
 				// as required, but the only value that would let this edit
@@ -68,7 +77,13 @@ func newAntigravityClaimGuardCmd() *cobra.Command {
 				// alternative risks approving edits on the user's behalf.
 				return nil
 			}
-			hooks.AuditDenial("antigravity", in.ConversationID, cwd, d)
+			// Audited against the workspace the decision came from: the claim it
+			// names lives in that project's database, and nowhere else.
+			denyCWD := d.CWD
+			if denyCWD == "" {
+				denyCWD = in.CWD()
+			}
+			hooks.AuditDenial("antigravity", in.ConversationID, denyCWD, d)
 			return json.NewEncoder(os.Stdout).Encode(hooks.NewAntigravityDeny(d.Reason))
 		},
 	}

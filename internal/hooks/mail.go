@@ -2,7 +2,6 @@ package hooks
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -180,42 +179,19 @@ func indent(body string) string {
 // openProject opens the project database for a delivery hook, or reports that
 // there is nothing here to open.
 //
-// Writable, because delivery has to write: a heartbeat, a notified_at stamp. But
-// never migrating, and this is the important part. These hooks run in every
-// project the agent touches, on every edit and every turn; if they migrated,
-// installing a new stigmergy would silently upgrade the schema of every
-// repository an agent happened to visit — mid-edit, under a 250ms lock timeout,
-// racing whatever else holds the database open. Schema changes belong to `init`,
-// `doctor` and the MCP server, which can afford to take their time and can tell
-// you what they did.
+// Writable, because delivery has to write: a heartbeat, a notified_at stamp.
+// Quiet, because a database this binary does not recognise is left alone — no
+// delivery, no heartbeat, no complaint. The agent is not silently stranded by
+// that, because the claim guard checks the same version and fails closed loudly,
+// with the one message that matters ("run stigmergy doctor"), rather than a
+// mailbox quietly doing nothing.
 //
-// So a database this binary does not recognise is left alone: no delivery, no
-// heartbeat, no complaint. The agent is not silently stranded by that, because
-// the claim guard checks the same version and fails closed loudly — with the one
-// message that matters ("run stigmergy doctor"), rather than a mailbox quietly
-// doing nothing.
+// The resolution, the version gate and the never-migrate rule all live in
+// resolveProject now; this is the delivery-shaped view of it.
 func openProject(cwd string) (*store.DB, *gitx.Repo, bool) {
-	repo, err := gitx.Resolve(cwd)
-	if err != nil {
+	p, ok := openQuietly(cwd, writable)
+	if !ok {
 		return nil, nil, false
 	}
-	if _, err := os.Stat(store.ProjectDBPath(repo.CommonDir)); err != nil {
-		return nil, nil, false
-	}
-	db, err := store.OpenProject(repo.CommonDir, store.NoMigrate(), store.BusyTimeout(HookBusyTimeout))
-	if err != nil {
-		return nil, nil, false
-	}
-
-	version, err := db.SchemaVersion()
-	if err != nil {
-		db.Close()
-		return nil, nil, false
-	}
-	latest, err := store.LatestVersion(store.Project)
-	if err != nil || version != latest {
-		db.Close()
-		return nil, nil, false
-	}
-	return db, repo, true
+	return p.DB, p.Repo, true
 }

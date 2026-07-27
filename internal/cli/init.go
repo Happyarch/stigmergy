@@ -14,6 +14,7 @@ import (
 	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/hostcfg"
 	"github.com/happyarch/stigmergy/internal/hosts"
+	"github.com/happyarch/stigmergy/internal/project"
 	"github.com/happyarch/stigmergy/internal/store"
 	"github.com/happyarch/stigmergy/internal/xdg"
 )
@@ -90,6 +91,24 @@ func validHost(flag string) bool {
 }
 
 func runInit(out io.Writer, repo *gitx.Repo, host string) error {
+	// Refuse to adopt a repository that is already part of a project.
+	//
+	// One os.Stat, guarding the worst failure mode available here. Without it,
+	// `init` in a member creates a second database in .git/ beside the pointer;
+	// resolution follows the pointer to the project database while the stray one
+	// sits there looking authoritative — so claims get taken in one place and
+	// enforced against another, and nothing reports a problem.
+	if ptr, ok, err := project.ReadPointer(repo.CommonDir); err != nil {
+		return err
+	} else if ok {
+		fmt.Fprintf(out, "%s is already a member of project %s, as %q.\n\n",
+			repo.WorktreeRoot, ptr.ProjectID, ptr.RepoID)
+		fmt.Fprintln(out, "Its state lives in the project database, shared with the other repositories.")
+		fmt.Fprintln(out, "  stigmergy doctor          check this project")
+		fmt.Fprintln(out, "  stigmergy project list    every project on this machine")
+		return fmt.Errorf("already a project member; `init` would create a second database beside the pointer")
+	}
+
 	// The database first: the hooks check for it to decide whether stigmergy is
 	// active here, so a project is either fully enabled or not enabled at all.
 	db, err := store.OpenProject(repo.CommonDir)
@@ -97,6 +116,14 @@ func runInit(out io.Writer, repo *gitx.Repo, host string) error {
 		return fmt.Errorf("could not create the project database: %w", err)
 	}
 	version, _ := db.SchemaVersion()
+	// Register this repository as the project's own member, and adopt any claim
+	// written before there was anything to attribute it to. Idempotent, and safe
+	// here because init can afford a write — unlike the hooks, which must never
+	// touch the schema.
+	if err := db.EnsureSelfRepo(project.SlugFor(repo.WorktreeRoot), repo.CommonDir, repo.WorktreeRoot); err != nil {
+		db.Close()
+		return fmt.Errorf("could not record this repository: %w", err)
+	}
 	db.Close()
 
 	globalPath, err := xdg.GlobalDBPath()
@@ -107,63 +134,20 @@ func runInit(out io.Writer, repo *gitx.Repo, host string) error {
 	if err != nil {
 		return fmt.Errorf("could not create the global database: %w", err)
 	}
+	// Record the project so `stigmergy doctor --all` can reach it later. This is
+	// the moment it becomes real, and it is the one place every adopted project
+	// passes through. Best-effort: a registry write must not be able to fail an
+	// otherwise successful adoption — the cost of a missing row is one manual
+	// `stigmergy doctor` in this repository.
+	_ = gdb.RememberProject(store.ProjectDBPath(repo.CommonDir), repo.WorktreeRoot)
 	gdb.Close()
 
 	fmt.Fprintf(out, "stigmergy is enabled in %s\n\n", repo.WorktreeRoot)
 	fmt.Fprintf(out, "  project database  %s (schema v%d)\n", store.ProjectDBPath(repo.CommonDir), version)
 	fmt.Fprintf(out, "  global database   %s\n\n", globalPath)
 
-	if host == "all" || host == "claude" {
-		if err := hostcfg.InstallClaude(repo.WorktreeRoot); err != nil {
-			return fmt.Errorf("could not configure Claude Code: %w", err)
-		}
-		mcpPath, settingsPath, _ := hostcfg.ClaudePaths(repo.WorktreeRoot)
-		fmt.Fprintln(out, "Claude Code")
-		fmt.Fprintf(out, "  %s          MCP server\n", mcpPath)
-		fmt.Fprintf(out, "  %s  hooks (claim enforcement)\n\n", settingsPath)
-	}
-
-	if host == "all" || host == "codex" {
-		if err := hostcfg.InstallCodex(repo.WorktreeRoot); err != nil {
-			return fmt.Errorf("could not configure Codex: %w", err)
-		}
-		cfgPath, hooksPath, _ := hostcfg.CodexPaths(repo.WorktreeRoot)
-		fmt.Fprintln(out, "Codex")
-		fmt.Fprintf(out, "  %s   MCP server\n", cfgPath)
-		fmt.Fprintf(out, "  %s    hooks (claim warnings)\n\n", hooksPath)
-		fmt.Fprintln(out, "  Codex loads project config and hooks only for TRUSTED projects.")
-		fmt.Fprintln(out, "  Start Codex here, trust the project when prompted, and review the hooks with /hooks.")
-		fmt.Fprintln(out, "  Codex cannot block an edit before it lands: claims there are enforced by halting")
-		fmt.Fprintln(out, "  the turn afterwards.")
-		fmt.Fprintln(out)
-	}
-
-	if host == "all" || host == "antigravity" {
-		if err := hostcfg.InstallAntigravity(repo.WorktreeRoot); err != nil {
-			return fmt.Errorf("could not configure Antigravity: %w", err)
-		}
-		pluginDir := hostcfg.AntigravityPluginDir(repo.WorktreeRoot)
-		fmt.Fprintln(out, "Antigravity")
-		fmt.Fprintf(out, "  %s\n", pluginDir)
-		fmt.Fprintln(out, "  (plugin.json, mcp_config.json, hooks.json)")
-		fmt.Fprintln(out, "  Antigravity reads the plugin automatically from .agents/plugins/.")
-		fmt.Fprintln(out, "  Your conversationId is the session_label for root_register — the pre-invocation hook tells you it.")
-		fmt.Fprintln(out)
-	}
-
-	if host == "all" || host == "opencode" {
-		if err := hostcfg.InstallOpenCode(repo.WorktreeRoot); err != nil {
-			return fmt.Errorf("could not configure opencode: %w", err)
-		}
-		configPath, pluginPath := hostcfg.OpenCodePaths(repo.WorktreeRoot)
-		fmt.Fprintln(out, "opencode")
-		fmt.Fprintf(out, "  %s        MCP server\n", configPath)
-		fmt.Fprintf(out, "  %s  hooks (claim enforcement)\n", pluginPath)
-		fmt.Fprintln(out, "  The plugin loads automatically from .opencode/plugin/ and shells out to stigmergy,")
-		fmt.Fprintln(out, "  so the binary must be on PATH for the agents opencode runs.")
-		fmt.Fprintln(out, "  opencode has no end-of-turn hook: mail is delivered as a turn begins, but an")
-		fmt.Fprintln(out, "  agent can finish without reading it.")
-		fmt.Fprintln(out)
+	if err := installHosts(out, repo.WorktreeRoot, host); err != nil {
+		return err
 	}
 
 	fmt.Fprintln(out, "Restart any running agent sessions so they pick up the new configuration.")
@@ -252,3 +236,70 @@ func confirmPurge(out io.Writer, in *os.File, dbPath, commonDir string, yes bool
 	}
 	return nil
 }
+
+// installHosts writes the host configuration for one repository.
+//
+// Lifted out of runInit so `stigmergy project create` and `project add` wire a
+// new member exactly the way `init` wires a lone repository. Two copies of this
+// would drift, and the way they would drift is a host silently missing from
+// members added later — which looks like stigmergy not working in one repository
+// of a project for no discoverable reason.
+func installHosts(out io.Writer, worktree, host string) error {
+	if host == "all" || host == "claude" {
+		if err := hostcfg.InstallClaude(worktree); err != nil {
+			return fmt.Errorf("could not configure Claude Code: %w", err)
+		}
+		mcpPath, settingsPath, _ := hostcfg.ClaudePaths(worktree)
+		fmt.Fprintln(out, "Claude Code")
+		fmt.Fprintf(out, "  %s          MCP server\n", mcpPath)
+		fmt.Fprintf(out, "  %s  hooks (claim enforcement)\n\n", settingsPath)
+	}
+
+	if host == "all" || host == "codex" {
+		if err := hostcfg.InstallCodex(worktree); err != nil {
+			return fmt.Errorf("could not configure Codex: %w", err)
+		}
+		cfgPath, hooksPath, _ := hostcfg.CodexPaths(worktree)
+		fmt.Fprintln(out, "Codex")
+		fmt.Fprintf(out, "  %s   MCP server\n", cfgPath)
+		fmt.Fprintf(out, "  %s    hooks (claim warnings)\n\n", hooksPath)
+		fmt.Fprintln(out, "  Codex loads project config and hooks only for TRUSTED projects.")
+		fmt.Fprintln(out, "  Start Codex here, trust the project when prompted, and review the hooks with /hooks.")
+		fmt.Fprintln(out, "  Codex cannot block an edit before it lands: claims there are enforced by halting")
+		fmt.Fprintln(out, "  the turn afterwards.")
+		fmt.Fprintln(out)
+	}
+
+	if host == "all" || host == "antigravity" {
+		if err := hostcfg.InstallAntigravity(worktree); err != nil {
+			return fmt.Errorf("could not configure Antigravity: %w", err)
+		}
+		pluginDir := hostcfg.AntigravityPluginDir(worktree)
+		fmt.Fprintln(out, "Antigravity")
+		fmt.Fprintf(out, "  %s\n", pluginDir)
+		fmt.Fprintln(out, "  (plugin.json, mcp_config.json, hooks.json)")
+		fmt.Fprintln(out, "  Antigravity reads the plugin automatically from .agents/plugins/.")
+		fmt.Fprintln(out, "  Your conversationId is the session_label for root_register — the pre-invocation hook tells you it.")
+		fmt.Fprintln(out)
+	}
+
+	if host == "all" || host == "opencode" {
+		if err := hostcfg.InstallOpenCode(worktree); err != nil {
+			return fmt.Errorf("could not configure opencode: %w", err)
+		}
+		configPath, pluginPath := hostcfg.OpenCodePaths(worktree)
+		fmt.Fprintln(out, "opencode")
+		fmt.Fprintf(out, "  %s        MCP server\n", configPath)
+		fmt.Fprintf(out, "  %s  hooks (claim enforcement)\n", pluginPath)
+		fmt.Fprintln(out, "  The plugin loads automatically from .opencode/plugin/ and shells out to stigmergy,")
+		fmt.Fprintln(out, "  so the binary must be on PATH for the agents opencode runs.")
+		fmt.Fprintln(out, "  opencode has no end-of-turn hook: mail is delivered as a turn begins, but an")
+		fmt.Fprintln(out, "  agent can finish without reading it.")
+		fmt.Fprintln(out)
+	}
+
+	return nil
+}
+
+// hostFlagList is the set of --host values, for error messages.
+func hostFlagList() []string { return hosts.Flags() }

@@ -18,6 +18,30 @@ args = ["mcp"]
 startup_timeout_sec = 10.0
 tool_timeout_sec = 60.0
 
+[mcp_servers.stigmergy.tools.context_open]
+approval_mode = "approve"
+
+[mcp_servers.stigmergy.tools.root_register]
+approval_mode = "approve"
+
+[mcp_servers.stigmergy.tools.memory_search]
+approval_mode = "approve"
+
+[mcp_servers.stigmergy.tools.mailbox_inbox]
+approval_mode = "approve"
+
+[mcp_servers.stigmergy.tools.mailbox_send]
+approval_mode = "approve"
+
+[mcp_servers.stigmergy.tools.memory_list]
+approval_mode = "approve"
+
+[mcp_servers.stigmergy.tools.root_list_active]
+approval_mode = "approve"
+
+[mcp_servers.stigmergy.tools.mailbox_mark_read]
+approval_mode = "approve"
+
 [memories]
 use_memories = false
 # <<< stigmergy managed block <<<

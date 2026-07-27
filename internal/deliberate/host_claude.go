@@ -43,6 +43,13 @@ func (c claudeAdapter) Turn(ctx context.Context, a *Agent, prompt string) (strin
 	// bwrap makes this choice non-load-bearing (§6.4) — which is the point of
 	// putting the boundary in the kernel — but there is no reason to hand a
 	// worker a bigger hammer than the job needs.
+	// Every member repository, not just the one we chdir into. bwrap already
+	// overlays them all, but --add-dir is what decides which paths claude's own
+	// tools will touch — without it the worker is blocked by its own host from
+	// editing a sibling repository the sandbox is perfectly happy to let it write.
+	for _, d := range a.WorkDirs() {
+		args = append(args, "--add-dir", d)
+	}
 	args = append(args, "--permission-mode", "acceptEdits", "--model", a.Model)
 	if a.Effort != "" {
 		args = append(args, "--effort", a.Effort)

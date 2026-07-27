@@ -40,7 +40,7 @@ func TestOrderIsMaskFirstBindLast(t *testing.T) {
 	}
 	// A state dir that certainly exists, so it is not skipped.
 	state := home
-	args := BwrapArgs(repo, []string{state}, []string{"true"})
+	args := BwrapArgs(Sandbox{Repos: []string{repo}, Chdir: repo, StateDirs: []string{state}, PayloadPath: ""}, []string{"true"})
 
 	tmpfs := slices.Index(args, "--tmpfs")
 	repoOverlay := indexOfPair(args, "--tmp-overlay", repo)
@@ -63,7 +63,7 @@ func TestOrderIsMaskFirstBindLast(t *testing.T) {
 // bound, so a worker at the real path cannot touch the real files.
 func TestTheWorkerWritesNothingReal(t *testing.T) {
 	repo := "/mnt/code/project"
-	args := BwrapArgs(repo, nil, []string{"claude", "-p"})
+	args := BwrapArgs(Sandbox{Repos: []string{repo}, Chdir: repo, StateDirs: nil, PayloadPath: ""}, []string{"claude", "-p"})
 
 	if indexOfPair(args, "--ro-bind", "/") != 0 {
 		t.Errorf("the base layer must be --ro-bind / / and must come first; got %v", args[:4])
@@ -91,7 +91,7 @@ func TestTheWorkerWritesNothingReal(t *testing.T) {
 // worker could `cat` another slot's turn.
 func TestTheRunDirIsHiddenFromWorkers(t *testing.T) {
 	repo := "/mnt/code/project"
-	args := BwrapArgs(repo, nil, []string{"true"})
+	args := BwrapArgs(Sandbox{Repos: []string{repo}, Chdir: repo, StateDirs: nil, PayloadPath: ""}, []string{"true"})
 
 	want := repo + "/.git/deliberate"
 	i := indexOfPair(args, "--tmpfs", want)
@@ -114,7 +114,7 @@ func TestHomeIsOverlaidSoToolsWork(t *testing.T) {
 	if err != nil || home == "" {
 		t.Skip("no home dir")
 	}
-	args := BwrapArgs("/mnt/code/p", nil, []string{"true"})
+	args := BwrapArgs(Sandbox{Repos: []string{"/mnt/code/p"}, Chdir: "/mnt/code/p", StateDirs: nil, PayloadPath: ""}, []string{"true"})
 	if indexOfPair(args, "--tmp-overlay", home) == -1 {
 		t.Error("$HOME must be overlaid or every tool cache is read-only and builds fail")
 	}
@@ -125,7 +125,7 @@ func TestHomeIsOverlaidSoToolsWork(t *testing.T) {
 func TestStateDirsSurvive(t *testing.T) {
 	// /etc exists everywhere; BwrapArgs skips missing sources because bwrap fails
 	// hard on one.
-	args := BwrapArgs("/mnt/code/p", []string{"/etc", "/definitely/not/here"}, []string{"true"})
+	args := BwrapArgs(Sandbox{Repos: []string{"/mnt/code/p"}, Chdir: "/mnt/code/p", StateDirs: []string{"/etc", "/definitely/not/here"}, PayloadPath: ""}, []string{"true"})
 
 	if indexOfPair(args, "--bind", "/etc") == -1 {
 		t.Error("an existing state dir must be bound writable or session resume dies")
@@ -137,7 +137,7 @@ func TestStateDirsSurvive(t *testing.T) {
 
 // TestCommandComesLast: everything after -- is the host's argv, not bwrap's.
 func TestCommandComesLast(t *testing.T) {
-	args := BwrapArgs("/mnt/code/p", nil, []string{"codex", "exec", "--json"})
+	args := BwrapArgs(Sandbox{Repos: []string{"/mnt/code/p"}, Chdir: "/mnt/code/p", StateDirs: nil, PayloadPath: ""}, []string{"codex", "exec", "--json"})
 	i := slices.Index(args, "--")
 	if i == -1 {
 		t.Fatal("the host command must be separated by --")

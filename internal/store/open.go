@@ -78,6 +78,19 @@ func OpenProject(commonDir string, opts ...Option) (*DB, error) {
 	return open(ProjectDBPath(commonDir), Project, meta, opts...)
 }
 
+// OpenProjectAt opens a project database by its own path rather than by the git
+// common dir containing it.
+//
+// Two callers need this and neither has a common dir to offer: the project
+// registry, which stores database paths because a project spanning several
+// repositories has no single common dir; and any project whose database lives
+// outside a `.git` directory entirely. It deliberately does not write
+// created_common_dir — that row records the repository a database was born in,
+// and a caller that only knows a path has nothing truthful to put there.
+func OpenProjectAt(path string, opts ...Option) (*DB, error) {
+	return open(path, Project, map[string]string{"db_kind": string(Project)}, opts...)
+}
+
 // OpenGlobal opens (creating and migrating unless ReadOnly) the global
 // database at the given path.
 func OpenGlobal(path string, opts ...Option) (*DB, error) {

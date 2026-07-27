@@ -22,16 +22,45 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/happyarch/stigmergy/internal/xdg"
 )
 
 // Config is one run.
 type Config struct {
-	Repo      string  // worktree root of the repository being planned about
+	// Repos is every repository the deliberation may touch, in project order.
+	// Repos[0] is where the workers start unless Primary says otherwise.
+	//
+	// A project spanning a client and its service needs all of them: with one
+	// overlaid and the rest on the read-only base layer, a worker can READ the
+	// others and every write to them fails EROFS — which is the cross-cutting
+	// change multi-repo deliberation exists to plan.
+	Repos     []string
+	Primary   string  // where workers start; defaults to Repos[0]
 	Intent    string  // the seed / brief. the user's words.
 	Out       string  // absolute path for the final spec
 	Agents    []Agent // rotation order. len >= 1.
 	MaxRounds int
 	RunID     string
+	// RunRoot is where run directories live. Defaults to XDG state.
+	//
+	// It moved out of .git/deliberate because with several repositories there is
+	// no single repository to put it in, and choosing one would make that
+	// repository special in a design that is otherwise symmetric. It also fixes a
+	// latent bug on the way out: the old path joined ".git" literally, which is a
+	// FILE rather than a directory in a linked worktree.
+	RunRoot string
+
+	// NewAdapter builds the adapter for a host. Defaults to the package-level
+	// NewAdapter, which is what every real run uses.
+	//
+	// It exists so the driver can be tested without a model. Adapter is three
+	// methods, and Run's whole job — the five-turn round, the rotation offset,
+	// the judge re-prompt, what each role is and is not shown — is decided above
+	// that interface and was, until this seam, reachable only by spending real
+	// frontier-model turns. Which is why the stale cost arithmetic and the
+	// mis-joined run directory survived as long as they did.
+	NewAdapter func(kind string) (Adapter, error)
 }
 
 // Result is what a run produced.
@@ -44,19 +73,43 @@ type Result struct {
 
 // Run drives the pipeline to a verdict or to the round ceiling.
 func Run(ctx context.Context, cfg Config, log io.Writer) (Result, error) {
-	if err := RequireBwrap(); err != nil {
-		return Result{}, err
+	// The boundary is required for the real hosts, and runWrapped — the only
+	// place that ever execs bwrap — is reached only through them. A custom
+	// factory is the test seam and launches no host, so demanding bwrap there
+	// would refuse to run for a reason that does not apply. There is still no
+	// unwrapped path to a real host: that is what makes this safe to skip.
+	if cfg.NewAdapter == nil {
+		if err := RequireBwrap(); err != nil {
+			return Result{}, err
+		}
 	}
 	if len(cfg.Agents) == 0 {
 		return Result{}, errors.New("deliberation needs at least one agent")
 	}
+	if len(cfg.Repos) == 0 {
+		return Result{}, errors.New("deliberation needs at least one repository")
+	}
+	if cfg.Primary == "" {
+		cfg.Primary = cfg.Repos[0]
+	}
 	if cfg.MaxRounds < 1 {
 		cfg.MaxRounds = 3
 	}
+	if cfg.RunRoot == "" {
+		root, err := DefaultRunRoot()
+		if err != nil {
+			return Result{}, err
+		}
+		cfg.RunRoot = root
+	}
 
+	newAdapter := cfg.NewAdapter
+	if newAdapter == nil {
+		newAdapter = NewAdapter
+	}
 	adapters := make([]Adapter, len(cfg.Agents))
 	for i := range cfg.Agents {
-		a, err := NewAdapter(cfg.Agents[i].Kind)
+		a, err := newAdapter(cfg.Agents[i].Kind)
 		if err != nil {
 			return Result{}, err
 		}
@@ -75,7 +128,8 @@ func Run(ctx context.Context, cfg Config, log io.Writer) (Result, error) {
 	// because there was never anything on disk to leave.
 	for i := range cfg.Agents {
 		cfg.Agents[i].Slot = i
-		cfg.Agents[i].Workdir = cfg.Repo
+		cfg.Agents[i].Workdir = cfg.Primary
+		cfg.Agents[i].Confine = Sandbox{Repos: cfg.Repos, RunDirMask: cfg.RunRoot}
 	}
 
 	// Create the run directory before the first turn, not lazily on the first
@@ -178,7 +232,17 @@ func turn(ctx context.Context, cfg Config, adapters []Adapter, a *Agent, r Role,
 	fmt.Fprintf(log, "  %-9s %s … ", r, a)
 	start := time.Now()
 
-	out, session, err := adapters[a.Slot].Turn(ctx, a, Prompt(r, p))
+	// The brief goes to a file, and the file is bound into the sandbox. It lands
+	// in the run directory, so it is also the record of exactly what this turn
+	// was asked — previously reconstructable only by replaying the driver.
+	payloadPath, err := writePayload(cfg, a, r, Prompt(r, p))
+	if err != nil {
+		fmt.Fprintln(log, "failed")
+		return "", err
+	}
+	a.PayloadPath = payloadPath
+
+	out, session, err := adapters[a.Slot].Turn(ctx, a, Handoff)
 	if err != nil {
 		fmt.Fprintln(log, "failed")
 		return "", err
@@ -225,10 +289,41 @@ func adjudicate(ctx context.Context, cfg Config, adapters []Adapter, a *Agent, p
 	return v, nil
 }
 
-// runDir is where this run's turns are kept. Under .git/ so it is never
-// committed, and hidden from the workers by the sandbox.
+// writePayload puts a turn's brief on disk and returns its path.
+//
+// Written fresh every turn and named per (slot, role) so a re-prompt overwrites
+// the brief it is replacing rather than accumulating. It lives in the run
+// directory, which the sandbox masks with a tmpfs — so a worker can read its own
+// brief through the bind at SandboxPayloadPath and cannot read anyone else's.
+func writePayload(cfg Config, a *Agent, r Role, body string) (string, error) {
+	dir := runDir(cfg)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("slot%d-%s.prompt.md", a.Slot, r))
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// DefaultRunRoot is where run directories live: XDG *state*, not data.
+//
+// State rather than data is the distinction internal/xdg already draws, and this
+// is transient run output — turn transcripts and briefs, useful while a run is
+// alive and for reading afterwards, not something whose loss costs anything.
+func DefaultRunRoot() (string, error) {
+	dir, err := xdg.StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "deliberate"), nil
+}
+
+// runDir is where this run's turns are kept, and hidden from the workers by the
+// sandbox mask.
 func runDir(cfg Config) string {
-	return filepath.Join(cfg.Repo, ".git", "deliberate", cfg.RunID)
+	return filepath.Join(cfg.RunRoot, cfg.RunID)
 }
 
 func writeArtifact(cfg Config, name, body string) {

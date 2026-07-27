@@ -48,7 +48,15 @@ func (g antigravityAdapter) Turn(ctx context.Context, a *Agent, prompt string) (
 		args = append(args, "--conversation", a.Session)
 	}
 	// --add-dir, because cwd is ignored. bwrap is what actually confines it.
-	args = append(args, "--add-dir", a.Workdir, "--model", a.Model)
+	//
+	// Repeated once per member repository: the flag is documented "(repeatable)",
+	// verified against the installed agy. A multi-repo deliberation needs every
+	// member in the workspace, and agy mounting unrelated directories with no
+	// shared root is its ordinary mode of operation.
+	for _, d := range a.WorkDirs() {
+		args = append(args, "--add-dir", d)
+	}
+	args = append(args, "--model", a.Model)
 	// --print LAST, because it consumes the next argument as the prompt.
 	args = append(args, "--print", prompt)
 
