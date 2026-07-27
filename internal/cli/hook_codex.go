@@ -71,11 +71,16 @@ func newCodexMailNotifyCmd() *cobra.Command {
 			}
 			hooks.Heartbeat("codex", in.SessionID, in.CWD)
 
-			text := hooks.MailText(hooks.CheckMail("codex", in.SessionID, in.CWD, true))
+			mail := hooks.CheckMail("codex", in.SessionID, in.CWD)
+			text := hooks.MailText(mail)
 			if text == "" {
 				return nil
 			}
-			return json.NewEncoder(os.Stdout).Encode(hooks.CodexWarning{SystemMessage: text})
+			if err := json.NewEncoder(os.Stdout).Encode(hooks.CodexWarning{SystemMessage: text}); err != nil {
+				return err
+			}
+			hooks.MarkDelivered("codex", in.SessionID, in.CWD, mail)
+			return nil
 		},
 	}
 }

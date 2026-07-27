@@ -43,13 +43,14 @@ func TestMailIsHandedToTheAgentExactlyOnce(t *testing.T) {
 
 	// A reminder at the top of a turn mentions the mail without claiming it: an
 	// agent on its way to do something else has been told, not delivered to.
-	reminded := CheckMail("claude-code", "sess-recipient", f.worktree, false)
+	reminded := CheckMail("claude-code", "sess-recipient", f.worktree)
 	if len(reminded.Pending) != 1 {
 		t.Fatalf("prompt-time reminder found %d messages, want 1", len(reminded.Pending))
 	}
 
 	// The Stop gate claims it: the agent has been interrupted and handed the text.
-	delivered := CheckMail("claude-code", "sess-recipient", f.worktree, true)
+	delivered := CheckMail("claude-code", "sess-recipient", f.worktree)
+	MarkDelivered("claude-code", "sess-recipient", f.worktree, delivered)
 	if len(delivered.Pending) != 1 {
 		t.Fatalf("Stop gate found %d messages, want 1 — the reminder must not have consumed it", len(delivered.Pending))
 	}
@@ -63,10 +64,10 @@ func TestMailIsHandedToTheAgentExactlyOnce(t *testing.T) {
 
 	// And never again. Blocking the same turn-end forever would leave the agent
 	// unable to finish at all.
-	if again := CheckMail("claude-code", "sess-recipient", f.worktree, true); len(again.Pending) != 0 {
+	if again := CheckMail("claude-code", "sess-recipient", f.worktree); len(again.Pending) != 0 {
 		t.Fatalf("the same message was delivered twice: %d pending", len(again.Pending))
 	}
-	if MailText(CheckMail("claude-code", "sess-recipient", f.worktree, false)) != "" {
+	if MailText(CheckMail("claude-code", "sess-recipient", f.worktree)) != "" {
 		t.Error("a delivered message is still being announced")
 	}
 }
@@ -78,11 +79,11 @@ func TestNoMailCostsNothing(t *testing.T) {
 	f := newFixture(t)
 	f.register(t, "claude-code", "sess-quiet")
 
-	if text := MailText(CheckMail("claude-code", "sess-quiet", f.worktree, true)); text != "" {
+	if text := MailText(CheckMail("claude-code", "sess-quiet", f.worktree)); text != "" {
 		t.Errorf("an empty mailbox produced %q, want silence", text)
 	}
 	// An unregistered session has no mailbox, and must not be nagged about one.
-	if text := MailText(CheckMail("claude-code", "sess-unregistered", f.worktree, true)); text != "" {
+	if text := MailText(CheckMail("claude-code", "sess-unregistered", f.worktree)); text != "" {
 		t.Errorf("an unregistered session produced %q, want silence", text)
 	}
 }
@@ -148,7 +149,7 @@ func TestHooksNeverMigrateTheSchema(t *testing.T) {
 
 	// Every hook path, against a schema it must refuse to touch.
 	Heartbeat("claude-code", "sess-worker", f.worktree)
-	if mail := CheckMail("claude-code", "sess-worker", f.worktree, true); !mail.empty() {
+	if mail := CheckMail("claude-code", "sess-worker", f.worktree); !mail.empty() {
 		t.Error("a delivery hook read a database whose schema it does not recognise")
 	}
 	if text := SessionStartText("claude-code", "sess-worker", f.worktree); text == "" {
@@ -180,5 +181,65 @@ func TestConflictNamesTheOwnerAndWhetherItCanAnswer(t *testing.T) {
 		if !strings.Contains(d.Reason, want) {
 			t.Errorf("denial omits %q:\n%s", want, d.Reason)
 		}
+	}
+}
+
+// sendTo registers both roots and puts one message in the recipient's mailbox.
+func (f *fixture) sendTo(t *testing.T, subject, body string) {
+	t.Helper()
+	sender := f.register(t, "codex", "sess-sender")
+	f.register(t, "claude-code", "sess-recipient")
+	recipient, err := f.db.RootBySession("claude-code", "sess-recipient")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.SendMessage(store.SendRequest{
+		FromRoot: sender, ToRoot: recipient.RootID, Subject: subject, Body: body,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Checking mail must not consume it. Only a caller that has actually written the
+// text says so, by calling MarkDelivered afterwards.
+//
+// The old shape marked notified_at inside CheckMail, which put the record of
+// "we showed this to the agent" BEFORE the rendering and before the write to
+// stdout. A host that closed the pipe, or a hook that died in between, consumed
+// the message without displaying it — and the sender then waits forever on a
+// reply to a message nothing will ever show, with no record anywhere of why.
+func TestCheckingMailDoesNotConsumeIt(t *testing.T) {
+	f := newFixture(t)
+	f.sendTo(t, "a question", "are you done with src?")
+
+	// Checked repeatedly, as a failing hook retried by the host would.
+	for i := 0; i < 3; i++ {
+		m := CheckMail("claude-code", "sess-recipient", f.worktree)
+		if len(m.Pending) != 1 {
+			t.Fatalf("check %d found %d pending, want 1 — reading the mailbox consumed the message",
+				i+1, len(m.Pending))
+		}
+	}
+
+	// Only now, once something has actually shown it.
+	m := CheckMail("claude-code", "sess-recipient", f.worktree)
+	MarkDelivered("claude-code", "sess-recipient", f.worktree, m)
+
+	if after := CheckMail("claude-code", "sess-recipient", f.worktree); len(after.Pending) != 0 {
+		t.Errorf("%d messages still pending after delivery — the agent will be interrupted again",
+			len(after.Pending))
+	}
+}
+
+// MarkDelivered with nothing pending must do nothing, so a caller that rendered
+// an empty message cannot mark real mail as shown.
+func TestMarkDeliveredWithNothingPendingIsANoop(t *testing.T) {
+	f := newFixture(t)
+	f.sendTo(t, "a question", "still there?")
+
+	MarkDelivered("claude-code", "sess-recipient", f.worktree, Mail{})
+
+	if m := CheckMail("claude-code", "sess-recipient", f.worktree); len(m.Pending) != 1 {
+		t.Errorf("%d pending, want 1 — an empty delivery consumed real mail", len(m.Pending))
 	}
 }

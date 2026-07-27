@@ -137,7 +137,7 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 	// same mailbox — and to whatever arrived while it was away. Unshown, that mail
 	// would wait for the end of the first turn; shown here, it can shape the work
 	// instead of interrupting it.
-	if text := MailText(CheckMail(agentKind, sessionID, cwd, false)); text != "" {
+	if text := MailText(CheckMail(agentKind, sessionID, cwd)); text != "" {
 		sb.WriteString("\n")
 		sb.WriteString(text)
 	}

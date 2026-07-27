@@ -181,7 +181,7 @@ func newAntigravityPreInvocationCmd() *cobra.Command {
 
 			// Mail notify: non-claiming check so the same message still
 			// interrupts at Stop if the agent does not act on it here.
-			mailText := hooks.MailText(hooks.CheckMail("antigravity", in.ConversationID, in.CWD(), false))
+			mailText := hooks.MailText(hooks.CheckMail("antigravity", in.ConversationID, in.CWD()))
 			if mailText != "" {
 				parts = append(parts, mailText)
 			}
@@ -228,10 +228,14 @@ func newAntigravityStopCmd() *cobra.Command {
 			}
 			hooks.Heartbeat("antigravity", in.ConversationID, in.CWD())
 
-			mail := hooks.CheckMail("antigravity", in.ConversationID, in.CWD(), true)
+			mail := hooks.CheckMail("antigravity", in.ConversationID, in.CWD())
 			if text := hooks.MailText(mail); text != "" {
-				return json.NewEncoder(os.Stdout).Encode(
-					hooks.NewAntigravityStopBlock(text))
+				if err := json.NewEncoder(os.Stdout).Encode(
+					hooks.NewAntigravityStopBlock(text)); err != nil {
+					return err
+				}
+				hooks.MarkDelivered("antigravity", in.ConversationID, in.CWD(), mail)
+				return nil
 			}
 
 			// No mail, and nothing still running: the session is over, so free

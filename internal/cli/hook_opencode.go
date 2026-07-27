@@ -144,12 +144,18 @@ func newOpenCodeContextCmd() *cobra.Command {
 			// SessionStartText carries the mail itself, so asking for both would
 			// deliver it twice.
 			var text string
+			var mail hooks.Mail
 			if hooks.Registered(openCodeKind, in.SessionID, in.CWD()) {
-				text = hooks.MailText(hooks.CheckMail(openCodeKind, in.SessionID, in.CWD(), true))
+				mail = hooks.CheckMail(openCodeKind, in.SessionID, in.CWD())
+				text = hooks.MailText(mail)
 			} else {
 				text = hooks.SessionStartText(openCodeKind, in.SessionID, in.CWD())
 			}
-			return json.NewEncoder(os.Stdout).Encode(hooks.OpenCodeContext{Context: text})
+			if err := json.NewEncoder(os.Stdout).Encode(hooks.OpenCodeContext{Context: text}); err != nil {
+				return err
+			}
+			hooks.MarkDelivered(openCodeKind, in.SessionID, in.CWD(), mail)
+			return nil
 		},
 	}
 }

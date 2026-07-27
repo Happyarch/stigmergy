@@ -65,12 +65,18 @@ func newMailGateCmd() *cobra.Command {
 			}
 			hooks.Heartbeat("claude-code", in.SessionID, in.CWD)
 
-			mail := hooks.CheckMail("claude-code", in.SessionID, in.CWD, true)
+			mail := hooks.CheckMail("claude-code", in.SessionID, in.CWD)
 			text := hooks.MailText(mail)
 			if text == "" {
 				return nil
 			}
-			return json.NewEncoder(os.Stdout).Encode(hooks.NewStopBlock(text))
+			if err := json.NewEncoder(os.Stdout).Encode(hooks.NewStopBlock(text)); err != nil {
+				// The mail was never written, so it stays undelivered and will
+				// interrupt again. Marking first would consume it silently.
+				return err
+			}
+			hooks.MarkDelivered("claude-code", in.SessionID, in.CWD, mail)
+			return nil
 		},
 	}
 }
@@ -101,7 +107,7 @@ func newMailNotifyCmd() *cobra.Command {
 			// its claims on the strength of a silence that was never its own.
 			hooks.Heartbeat("claude-code", in.SessionID, in.CWD)
 
-			text := hooks.MailText(hooks.CheckMail("claude-code", in.SessionID, in.CWD, false))
+			text := hooks.MailText(hooks.CheckMail("claude-code", in.SessionID, in.CWD))
 			if text == "" {
 				return nil
 			}

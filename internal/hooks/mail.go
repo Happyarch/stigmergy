@@ -55,8 +55,8 @@ func Heartbeat(agentKind, sessionLabel, cwd string) {
 
 // Mail is what a delivery hook found waiting for an agent.
 type Mail struct {
-	// Pending is mail the agent has never been shown. Reporting it marks it
-	// delivered, so it interrupts exactly once.
+	// Pending is mail the agent has never been shown. A caller that shows it
+	// calls MarkDelivered, so it interrupts exactly once.
 	Pending []store.Delivery
 	// Stalled are conversations where this agent is waiting on a reply from a
 	// root that is gone. Nobody will ever answer these, and the agent needs to be
@@ -66,16 +66,15 @@ type Mail struct {
 
 func (m Mail) empty() bool { return len(m.Pending) == 0 && len(m.Stalled) == 0 }
 
-// CheckMail finds what an agent needs to hear about, and — if claim is true —
-// records the pending messages as delivered.
+// CheckMail finds what an agent needs to hear about. It records nothing.
 //
-// The claim flag is the difference between announcing and reminding. The Stop
-// hook claims: it has interrupted the agent, the mail is now in its context, and
-// interrupting a second time for the same message would be nagging rather than
-// delivering. A reminder at the top of a turn does not claim, because a message
-// mentioned in passing to an agent that is about to do something else has not
-// really been delivered at all.
-func CheckMail(agentKind, sessionLabel, cwd string, claim bool) Mail {
+// Whether this counts as DELIVERY is the caller's to decide, by calling
+// MarkDelivered afterwards — and only once the text has actually been written.
+// The Stop hook delivers: it has interrupted the agent, the mail is now in its
+// context, and interrupting a second time for the same message would be nagging.
+// A reminder at the top of a turn does not, because a message mentioned in
+// passing to an agent about to do something else has not really been delivered.
+func CheckMail(agentKind, sessionLabel, cwd string) Mail {
 	if sessionLabel == "" {
 		return Mail{}
 	}
@@ -105,17 +104,43 @@ func CheckMail(agentKind, sessionLabel, cwd string, claim bool) Mail {
 		}
 	}
 
-	if claim && len(m.Pending) > 0 {
-		ids := make([]int64, 0, len(m.Pending))
-		for _, p := range m.Pending {
-			ids = append(ids, p.ID)
-		}
-		// If this write fails the message stays unnotified and will interrupt
-		// again next turn. Annoying, and strictly better than the alternative:
-		// marking mail delivered that the agent never saw.
-		_ = db.MarkNotified(root.RootID, ids)
-	}
 	return m
+}
+
+// MarkDelivered records that this mail was actually put in front of the agent.
+//
+// Call it AFTER the text has been written, never before. notified_at means
+// "stigmergy showed this to the agent", so marking it while the showing might
+// still fail is a lie by the field's own definition — and an expensive one: the
+// message is consumed, never displayed, and the agent waiting on a reply waits
+// forever with nothing anywhere recording why.
+//
+// It used to happen inside CheckMail, which put the marking before the rendering
+// AND the write. Splitting it costs one extra database open, paid only on the
+// turns where mail actually exists.
+//
+// Best-effort in the other direction, deliberately: if this fails the message
+// stays unnotified and interrupts again next turn. Delivering twice is a
+// nuisance; delivering zero times is a deadlock.
+func MarkDelivered(agentKind, sessionLabel, cwd string, m Mail) {
+	if len(m.Pending) == 0 {
+		return
+	}
+	db, _, ok := openProject(cwd)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
+	root, err := db.RootBySession(agentKind, sessionLabel)
+	if err != nil {
+		return
+	}
+	ids := make([]int64, 0, len(m.Pending))
+	for _, p := range m.Pending {
+		ids = append(ids, p.ID)
+	}
+	_ = db.MarkNotified(root.RootID, ids)
 }
 
 // MailText renders mail as the agent will read it: what arrived, who from,
