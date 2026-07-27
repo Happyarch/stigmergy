@@ -35,6 +35,7 @@ Memories
 - Scopes: "project" (this repo) and "global" (this machine, all repos). Search returns project hits first.
 - memory_write(scope, key, type, description, body, expected_version): expected_version=null creates and fails if the key exists; an integer updates and fails unless it is the current version. On a cas_conflict the error carries the current entry — re-read it, merge, retry. Never work around a conflict by inventing a new key: that is how two agents end up with two half-true memories.
 - memory_list gives keys and descriptions only. memory_read(scope, key) gives the body.
+- memory_list also takes updated_since / updated_before (RFC3339, both inclusive) and order_by "recent". These are last-CHANGE times, not last-checked times: nothing here records when anyone verified a memory, so a long-untouched entry is a candidate for a look, never a verdict that it has gone stale.
 - memory_promote copies a project memory to global. Promote what is true of you or your machine everywhere; leave repo-specific facts in the project scope.
 - memory_delete(scope, key, expected_version) hard-deletes. It is audited.
 - Good memories are durable and non-obvious: conventions, decisions, constraints, preferences. Not things the code or git history already says.

@@ -234,11 +234,16 @@ No parameters. State: **Registered** → drops back to **Opened**. Returns `root
 | `scopes` | string[] | no | `project`, `global`, or both (the default) |
 | | | | State: **Opened** |
 
-**Returns** `hits[]`: `scope`, `key`, `type`, `description`, `version`, `snippet`.
+**Returns** `hits[]`: `scope`, `key`, `type`, `description`, `version`, `snippet`,
+`updated_at`.
 
 Project hits always precede global ones regardless of the order you asked for
 them, because a fact recorded about *this* repository beats a general one.
-Ranking is bm25; at most 20 hits per scope.
+Ranking is bm25; at most 20 hits per scope. `updated_at` is reported alongside a
+hit and never folded into the ranking, and there are deliberately **no time
+filters here** — a filter interacting with the 20-hit cap would truncate
+differently than you expect, dropping matches you would have wanted to see. Use
+`memory_list` when you want to select by time.
 
 **Errors** — `wrong_state`, `invalid_input` (bad scope), `unsupported_search`.
 
@@ -261,12 +266,30 @@ A missing key is **not an error** — it is a normal answer, `{"found": false}`.
 
 > List the keys and descriptions in a scope, without bodies.
 
-| Parameter | Type | Required |
-|---|---|---|
-| `scope` | string | yes |
-| | | State: **Opened** |
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `scope` | string | yes | |
+| `updated_since` | string | no | RFC3339; last changed at or after this — **inclusive** |
+| `updated_before` | string | no | RFC3339; last changed at or before this — **inclusive** |
+| `order_by` | string | no | `key` (default) or `recent` |
+| | | | State: **Opened** |
 
 **Returns** `entries[]`: `key`, `type`, `description`, `version`, `updated_at`.
+
+`recent` orders by last change, newest first, with a `key` tie-break — memories
+written in a single call share a timestamp to the nanosecond, and an unstable
+order among them would make a paging upkeep routine skip entries.
+
+**`updated_at` is last MUTATION, not last verification.** stigmergy has never
+recorded when anyone checked that a memory still holds, and a write is no proof
+that anyone did: a typo fix moves this forward exactly as far as a rewrite does.
+So a long-untouched entry is a *candidate for a look*, never a finding that it
+has gone stale — and a recently-touched one has not thereby been confirmed.
+
+**Errors** — `wrong_state`; `invalid_input` (bad scope, an unparseable bound, an
+unknown `order_by`, or `updated_since` after `updated_before`). A malformed bound
+is rejected rather than ignored: silently dropping it would return a result that
+looks answered and is not.
 
 ### `memory_write`
 

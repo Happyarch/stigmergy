@@ -206,6 +206,7 @@ func runDoctor(out io.Writer, gc bool) error {
 		if n, err := countMemories(g); err == nil {
 			d.note("%d global memories", n)
 		}
+		repairTimestamps(d, g, "global")
 	}
 
 	fmt.Fprintln(out, "\nThis project")
@@ -290,6 +291,7 @@ func runDoctor(out io.Writer, gc bool) error {
 	if n, err := countMemories(p); err == nil {
 		d.note("%d project memories", n)
 	}
+	repairTimestamps(d, p, "project")
 	if active, err := p.ActiveClaims(""); err == nil {
 		if len(active) == 0 {
 			d.pass("no claims are currently held")
@@ -494,6 +496,34 @@ func joinWords(words []string) string {
 		return words[0] + " and " + words[1]
 	default:
 		return strings.Join(words[:len(words)-1], ", ") + ", and " + words[len(words)-1]
+	}
+}
+
+// repairTimestamps canonicalises stored memory timestamps, in whichever scope it
+// is handed.
+//
+// It runs unconditionally, not under --gc: --gc means retention pruning, which
+// deletes things, and this deletes nothing and changes no content. It is a
+// lossless rewrite of how an instant is spelled, and every read path already
+// tolerates the un-repaired form — so a database that never sees doctor still
+// sorts correctly. This only makes the common case clean.
+//
+// A timestamp nobody can parse is a failure rather than a warning: it cannot be
+// ordered, and the memory it belongs to will error on every read until a human
+// decides what the right instant was. There is nothing safe to guess.
+func repairTimestamps(d *diag, db *store.DB, scope string) {
+	rep, err := db.RepairMemoryTimestamps()
+	if err != nil {
+		d.warn("%s memory timestamps could not be repaired: %v", scope, err)
+		return
+	}
+	if rep.Repaired > 0 {
+		d.pass("%d %s memory timestamp(s) rewritten in canonical form", rep.Repaired, scope)
+	}
+	if len(rep.Bad) > 0 {
+		d.fail("%d %s memory timestamp(s) are unreadable: %s", len(rep.Bad), scope, strings.Join(rep.Bad, ", "))
+		d.note("Reading these memories fails. They were left untouched — no instant can be")
+		d.note("guessed safely. Fix them by hand in the database, or delete and rewrite them.")
 	}
 }
 

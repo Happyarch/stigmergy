@@ -79,8 +79,17 @@ func (s *Session) memoryRead(_ context.Context, _ *mcp.CallToolRequest, in Memor
 }
 
 // MemoryListInput lists a scope's index.
+//
+// The time bounds are on last MUTATION — the only time this schema records.
+// They answer "what has nobody touched in a while?", which is a question worth
+// asking during upkeep. They do not answer "what has gone stale": a memory can
+// be untouched for a year and still be true, and edited an hour ago without
+// anyone having checked it.
 type MemoryListInput struct {
-	Scope string `json:"scope" jsonschema:"project or global"`
+	Scope         string `json:"scope" jsonschema:"project or global"`
+	UpdatedSince  string `json:"updated_since,omitempty" jsonschema:"RFC3339; only entries last changed at or after this"`
+	UpdatedBefore string `json:"updated_before,omitempty" jsonschema:"RFC3339; only entries last changed at or before this"`
+	OrderBy       string `json:"order_by,omitempty" jsonschema:"key (default) or recent (most recently changed first)"`
 }
 
 // MemoryListOutput is bodyless on purpose: an index tells an agent what exists
@@ -99,7 +108,11 @@ func (s *Session) memoryList(_ context.Context, _ *mcp.CallToolRequest, in Memor
 	if err != nil {
 		return nil, MemoryListOutput{}, toolError(err)
 	}
-	entries, err := db.ListMemories()
+	entries, err := db.QueryMemories(store.MemoryQuery{
+		UpdatedSince:  in.UpdatedSince,
+		UpdatedBefore: in.UpdatedBefore,
+		OrderBy:       in.OrderBy,
+	})
 	if err != nil {
 		return nil, MemoryListOutput{}, toolError(err)
 	}

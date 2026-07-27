@@ -205,3 +205,33 @@ func Stamp(t time.Time) string { return t.UTC().Format(TimeLayout) }
 
 // ParseStamp reads a stored timestamp back.
 func ParseStamp(s string) (time.Time, error) { return time.Parse(TimeLayout, s) }
+
+// CanonicalStamp normalises a stored timestamp into TimeLayout form.
+//
+// Everything written by current code is already canonical, but the live
+// databases predate that guarantee: the global `machine-navi31-hard-locks` row
+// carries three fractional digits rather than nine. Fixed width is what makes a
+// timestamp compare chronologically as TEXT (see TimeLayout), so a short one
+// sorts wrong against its neighbours — "…:57.901Z" lands before "…:57.000000000Z"
+// because '9' > '0' only after the widths already disagree.
+//
+// Every read path therefore canonicalises, which is what lets callers compare
+// and sort what they are handed without knowing when the row was written.
+//
+// An unparseable value is an error rather than a passthrough. It cannot be
+// ordered at all, and returning it would quietly place a row that sorts wrong
+// inside a result set that claims to be sorted; `stigmergy doctor` reports it as
+// corruption and leaves it alone.
+func CanonicalStamp(s string) (string, error) {
+	if _, err := time.Parse(TimeLayout, s); err == nil {
+		return s, nil
+	}
+	// RFC3339Nano accepts any number of fractional digits including none, and any
+	// offset — so this covers every shape an older stigmergy or a hand-edit could
+	// have left behind. Stamp then re-renders it in UTC at full width.
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return "", fmt.Errorf("timestamp %q is not RFC3339", s)
+	}
+	return Stamp(t), nil
+}

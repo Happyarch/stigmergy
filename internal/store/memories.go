@@ -1,10 +1,12 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/happyarch/stigmergy/internal/serr"
@@ -54,6 +56,12 @@ type SearchHit struct {
 	Description string `json:"description"`
 	Version     int    `json:"version"`
 	Snippet     string `json:"snippet"`
+	// UpdatedAt is when this memory was last MUTATED — not when anyone last
+	// checked that it is still true. stigmergy has never recorded an assertion
+	// time, and a write is not proof of verification: a typo fix moves this
+	// forward exactly as far as a full rewrite does. It is reported alongside a
+	// hit and never folded into the ranking, which stays bm25.
+	UpdatedAt string `json:"updated_at"`
 }
 
 // ValidateKey enforces the key grammar shared by both scopes.
@@ -86,7 +94,25 @@ func scanMemory(row interface{ Scan(...any) error }) (*Memory, error) {
 	if err != nil {
 		return nil, serr.Internalf(err, "failed to read memory")
 	}
+	if err := canonicalStamps(m.Key, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		return nil, err
+	}
 	return &m, nil
+}
+
+// canonicalStamps rewrites scanned timestamps in place, or reports the row as
+// corrupt. Every projection that returns a timestamp goes through here, so no
+// caller has to wonder whether what it was handed is comparable.
+func canonicalStamps(key string, stamps ...*string) error {
+	for _, p := range stamps {
+		c, err := CanonicalStamp(*p)
+		if err != nil {
+			return serr.E(serr.Internal,
+				"memory %q has an unreadable timestamp: %v — run `stigmergy doctor`, which reports it", key, err)
+		}
+		*p = c
+	}
+	return nil
 }
 
 // ReadMemory returns one entry, or ErrNotFound.
@@ -101,14 +127,123 @@ func readMemoryTx(tx *sql.Tx, key string) (*Memory, error) {
 	return scanMemory(tx.QueryRow(`SELECT `+memoryCols+` FROM memories WHERE key = ?`, key))
 }
 
-// ListMemories returns every entry as a bodyless index, key-ordered.
-func (d *DB) ListMemories() ([]IndexEntry, error) {
-	rows, err := d.Query(`SELECT key, type, description, version, updated_at FROM memories ORDER BY key`)
+// Memory index orderings. OrderByKey is the default because it is stable and
+// says nothing: an index is for finding out what exists.
+const (
+	OrderByKey    = "key"
+	OrderByRecent = "recent"
+)
+
+// MemoryQuery selects and orders the memory index.
+//
+// The bounds are on last-mutation time, which is the only time this schema has
+// ever recorded. That makes this a way to find what has and has not been touched
+// lately — not a way to find what is or is not still true. Nothing here ranks,
+// scores, or judges; it filters and orders, and the caller decides what that
+// means.
+//
+// Both bounds are INCLUSIVE, and both must be RFC3339.
+type MemoryQuery struct {
+	UpdatedSince  string // inclusive lower bound; empty means unbounded
+	UpdatedBefore string // inclusive upper bound; empty means unbounded
+	OrderBy       string // "" or OrderByKey (default), or OrderByRecent
+}
+
+func (q MemoryQuery) normalize() (MemoryQuery, error) {
+	out := MemoryQuery{OrderBy: q.OrderBy}
+	if out.OrderBy == "" {
+		out.OrderBy = OrderByKey
+	}
+	if out.OrderBy != OrderByKey && out.OrderBy != OrderByRecent {
+		return out, serr.E(serr.InvalidInput,
+			"order_by %q is invalid: use %q (default) or %q", q.OrderBy, OrderByKey, OrderByRecent)
+	}
+	for _, b := range []struct {
+		name string
+		in   string
+		out  *string
+	}{
+		{"updated_since", q.UpdatedSince, &out.UpdatedSince},
+		{"updated_before", q.UpdatedBefore, &out.UpdatedBefore},
+	} {
+		if b.in == "" {
+			continue
+		}
+		c, err := CanonicalStamp(b.in)
+		if err != nil {
+			// Rejected rather than ignored: a bound nobody could parse, silently
+			// dropped, returns a result set that looks answered and is not.
+			return out, serr.E(serr.InvalidInput,
+				"%s %q is not a timestamp: use RFC3339, e.g. \"2026-07-01T00:00:00Z\"", b.name, b.in)
+		}
+		*b.out = c
+	}
+	if out.UpdatedSince != "" && out.UpdatedBefore != "" && out.UpdatedSince > out.UpdatedBefore {
+		return out, serr.E(serr.InvalidInput,
+			"updated_since (%s) is after updated_before (%s), so nothing can match", q.UpdatedSince, q.UpdatedBefore)
+	}
+	return out, nil
+}
+
+// QueryMemories returns the bodyless index, filtered and ordered.
+//
+// Filtering and sorting happen in Go, permanently and deliberately. `WHERE
+// updated_at >= ?` and `ORDER BY updated_at` compare raw TEXT, and the stored
+// text is not uniformly wide — so SQLite would exclude or misorder a
+// non-canonical row BEFORE Go ever got the chance to canonicalise it. Tolerant
+// parsing on the way out cannot undo a decision SQLite already made.
+//
+// `stigmergy doctor` repairs those rows, which should make the clean case the
+// common one. It must never become a correctness precondition: an unrepaired
+// database still has to sort correctly. The cost of doing it here is nil —
+// ListMemories has always fetched every row with no LIMIT, and memory sets are
+// measured in dozens.
+func (d *DB) QueryMemories(q MemoryQuery) ([]IndexEntry, error) {
+	q, err := q.normalize()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.Query(`SELECT key, type, description, version, updated_at FROM memories`)
 	if err != nil {
 		return nil, serr.Internalf(err, "failed to list memories")
 	}
 	defer rows.Close()
-	return scanIndex(rows)
+	entries, err := scanIndex(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	if q.UpdatedSince != "" || q.UpdatedBefore != "" {
+		kept := entries[:0]
+		for _, e := range entries {
+			if q.UpdatedSince != "" && e.UpdatedAt < q.UpdatedSince {
+				continue
+			}
+			if q.UpdatedBefore != "" && e.UpdatedAt > q.UpdatedBefore {
+				continue
+			}
+			kept = append(kept, e)
+		}
+		entries = kept
+	}
+
+	// The key tie-break is not cosmetic: memories written in one call share a
+	// timestamp to the nanosecond, and an unstable order among them makes a
+	// paging upkeep routine skip entries it has not seen.
+	slices.SortFunc(entries, func(a, b IndexEntry) int {
+		if q.OrderBy == OrderByRecent {
+			if c := cmp.Compare(b.UpdatedAt, a.UpdatedAt); c != 0 {
+				return c
+			}
+		}
+		return cmp.Compare(a.Key, b.Key)
+	})
+	return entries, nil
+}
+
+// ListMemories returns every entry as a bodyless index, key-ordered.
+func (d *DB) ListMemories() ([]IndexEntry, error) {
+	return d.QueryMemories(MemoryQuery{})
 }
 
 func scanIndex(rows *sql.Rows) ([]IndexEntry, error) {
@@ -118,12 +253,88 @@ func scanIndex(rows *sql.Rows) ([]IndexEntry, error) {
 		if err := rows.Scan(&e.Key, &e.Type, &e.Description, &e.Version, &e.UpdatedAt); err != nil {
 			return nil, serr.Internalf(err, "failed to read memory index")
 		}
+		if err := canonicalStamps(e.Key, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, serr.Internalf(err, "failed to read memory index")
 	}
 	return out, nil
+}
+
+// TimestampRepair reports what a repair pass did.
+type TimestampRepair struct {
+	Repaired int      // rows rewritten into canonical form
+	Bad      []string // keys whose timestamps could not be parsed, left untouched
+}
+
+// RepairMemoryTimestamps rewrites parseable non-canonical timestamps in place.
+//
+// It is lossless — the instant is preserved exactly, only its rendering
+// changes — and it touches neither version, updated_by, nor any content. A
+// repair is not a write in the sense the rest of this file means it: nobody
+// asserted anything, so nothing about the memory's own history moves.
+//
+// This lives in doctor rather than in a migration for two reasons. The known bad
+// row is in the GLOBAL database, and a project migration cannot reach it. And
+// robust RFC3339/RFC3339Nano parsing with UTC and nanosecond normalisation is
+// not something static embedded SQL does well.
+//
+// Unparseable values are counted and returned, never guessed at. There is no
+// safe default instant for a timestamp nobody can read.
+func (d *DB) RepairMemoryTimestamps() (TimestampRepair, error) {
+	var rep TimestampRepair
+	rows, err := d.Query(`SELECT key, created_at, updated_at FROM memories`)
+	if err != nil {
+		return rep, serr.Internalf(err, "failed to read memory timestamps")
+	}
+	type fix struct{ key, created, updated string }
+	var fixes []fix
+	for rows.Next() {
+		var f fix
+		if err := rows.Scan(&f.key, &f.created, &f.updated); err != nil {
+			rows.Close()
+			return rep, serr.Internalf(err, "failed to read memory timestamps")
+		}
+		created, cerr := CanonicalStamp(f.created)
+		updated, uerr := CanonicalStamp(f.updated)
+		if cerr != nil || uerr != nil {
+			rep.Bad = append(rep.Bad, f.key)
+			continue
+		}
+		if created != f.created || updated != f.updated {
+			fixes = append(fixes, fix{f.key, created, updated})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return rep, serr.Internalf(err, "failed to read memory timestamps")
+	}
+	rows.Close()
+	if len(fixes) == 0 {
+		return rep, nil
+	}
+
+	tx, err := d.Begin()
+	if err != nil {
+		return rep, serr.Internalf(err, "failed to begin transaction")
+	}
+	defer tx.Rollback()
+	for _, f := range fixes {
+		if _, err := tx.Exec(
+			`UPDATE memories SET created_at = ?, updated_at = ? WHERE key = ?`,
+			f.created, f.updated, f.key,
+		); err != nil {
+			return rep, serr.Internalf(err, "failed to repair the timestamps on memory %q", f.key)
+		}
+		rep.Repaired++
+	}
+	if err := tx.Commit(); err != nil {
+		return rep, serr.Internalf(err, "failed to commit timestamp repairs")
+	}
+	return rep, nil
 }
 
 // SearchMemories runs an FTS5 query, best match first (bm25), capped at
@@ -158,9 +369,12 @@ func (d *DB) searchWith(match string) ([]SearchHit, error) {
 	if match == "" {
 		return []SearchHit{}, nil
 	}
+	// snippet()'s second argument is a column index into memories_fts, NOT into
+	// this SELECT list, so adding a column here cannot move it. The virtual
+	// table's own column list is the thing that must not change.
 	rows, err := d.Query(
 		`SELECT m.key, m.type, m.description, m.version,
-		        snippet(memories_fts, 2, '[', ']', ' … ', 24)
+		        snippet(memories_fts, 2, '[', ']', ' … ', 24), m.updated_at
 		   FROM memories_fts f JOIN memories m ON m.rowid = f.rowid
 		  WHERE memories_fts MATCH ?
 		  ORDER BY bm25(memories_fts) LIMIT ?`, match, MaxSearchHits)
@@ -173,8 +387,11 @@ func (d *DB) searchWith(match string) ([]SearchHit, error) {
 	out := []SearchHit{}
 	for rows.Next() {
 		h := SearchHit{Scope: string(d.Kind)}
-		if err := rows.Scan(&h.Key, &h.Type, &h.Description, &h.Version, &h.Snippet); err != nil {
+		if err := rows.Scan(&h.Key, &h.Type, &h.Description, &h.Version, &h.Snippet, &h.UpdatedAt); err != nil {
 			return nil, serr.Internalf(err, "failed to read search results")
+		}
+		if err := canonicalStamps(h.Key, &h.UpdatedAt); err != nil {
+			return nil, err
 		}
 		out = append(out, h)
 	}

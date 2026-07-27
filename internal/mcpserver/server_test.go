@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/happyarch/stigmergy/internal/store"
 )
 
 // harness wires a real client to a real server over in-memory transports, in a
@@ -399,6 +402,85 @@ func TestMemoryPromoteThroughProtocol(t *testing.T) {
 		"query": "small diffs", "scopes": []string{"global"},
 	})["hits"].([]any); len(hits) != 1 || hits[0].(map[string]any)["scope"] != "global" {
 		t.Fatalf("global-scoped search = %#v", hits)
+	}
+}
+
+// The time surface has to survive the protocol, not just the store: the fields
+// only exist for agents if the JSON schema carries them.
+func TestMemoryListTimeSurfaceThroughProtocol(t *testing.T) {
+	h := newHarness(t)
+	h.open()
+	h.register()
+
+	for _, m := range []struct{ key, at string }{
+		{"first-note", "2026-01-01T00:00:00Z"},
+		{"second-note", "2026-03-01T00:00:00Z"},
+		{"third-note", "2026-05-01T00:00:00Z"},
+	} {
+		when, err := time.Parse(time.RFC3339, m.at)
+		if err != nil {
+			t.Fatalf("bad fixture time: %v", err)
+		}
+		restore := store.SetClock(func() time.Time { return when })
+		h.call("memory_write", map[string]any{
+			"scope": "project", "key": m.key, "type": "project",
+			"description": "note " + m.key, "body": "body of " + m.key,
+		})
+		restore()
+	}
+
+	keys := func(args map[string]any) []string {
+		h.t.Helper()
+		var out []string
+		for _, e := range h.call("memory_list", args)["entries"].([]any) {
+			out = append(out, e.(map[string]any)["key"].(string))
+		}
+		return out
+	}
+
+	if got := keys(map[string]any{"scope": "project", "order_by": "recent"}); strings.Join(got, ",") !=
+		"third-note,second-note,first-note" {
+		t.Errorf("order_by recent = %v", got)
+	}
+	if got := keys(map[string]any{
+		"scope": "project", "updated_since": "2026-02-01T00:00:00Z",
+	}); strings.Join(got, ",") != "second-note,third-note" {
+		t.Errorf("updated_since = %v", got)
+	}
+	// Omitting the fields entirely must keep the old behaviour exactly.
+	if got := keys(map[string]any{"scope": "project"}); strings.Join(got, ",") !=
+		"first-note,second-note,third-note" {
+		t.Errorf("default order = %v, want key order", got)
+	}
+
+	for name, args := range map[string]map[string]any{
+		"unparseable bound": {"scope": "project", "updated_since": "last tuesday"},
+		"unknown order_by":  {"scope": "project", "order_by": "freshness"},
+		"inverted range": {"scope": "project",
+			"updated_since": "2026-05-01T00:00:00Z", "updated_before": "2026-01-01T00:00:00Z"},
+	} {
+		if code := h.errCode("memory_list", args); code != "invalid_input" {
+			t.Errorf("%s: code=%q, want invalid_input", name, code)
+		}
+	}
+}
+
+// The timestamp rides along with a search hit, so an agent can see how old a
+// result is without a second call.
+func TestMemorySearchHitCarriesUpdatedAt(t *testing.T) {
+	h := newHarness(t)
+	h.open()
+	h.register()
+	h.call("memory_write", map[string]any{
+		"scope": "project", "key": "mounting-order", "type": "reference",
+		"description": "the overlay comes first", "body": "Apply the tmpfs after the overlay.",
+	})
+	hits := h.call("memory_search", map[string]any{"query": "tmpfs"})["hits"].([]any)
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits, want 1", len(hits))
+	}
+	if at, _ := hits[0].(map[string]any)["updated_at"].(string); at == "" {
+		t.Fatalf("search hit carries no updated_at: %#v", hits[0])
 	}
 }
 
