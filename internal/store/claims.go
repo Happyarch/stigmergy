@@ -244,6 +244,33 @@ func (d *DB) AcquireClaim(req ClaimRequest) (*Claim, error) {
 	}
 	defer tx.Rollback()
 
+	// Refresh the acquiring root FIRST, inside this transaction.
+	//
+	// heartbeat() releases the claims of a root that had already lapsed, which is
+	// correct — other agents were told those paths were free and one of them may
+	// already be editing. But it made every caller that heartbeats AFTER its real
+	// work destroy that work: claimAcquire inserted the claim, called touch(),
+	// and the sweep released "all of this root's claims" including the one from a
+	// moment earlier. The caller was handed the object captured before the
+	// release, describing an active claim with a full TTL that no longer existed.
+	// Silent and total, and the prescribed workflow — register, search, read for
+	// a while, claim before editing — walks straight into it, because reads do
+	// not heartbeat and RootTTL is 15m.
+	//
+	// Sweeping here instead makes the lapse, the overlap check and the insert one
+	// atomic step: the stale claims are gone before activeIn() looks, so a
+	// returning root re-acquiring its own scope gets a live claim rather than
+	// being handed the dead one, and the trailing touch() finds nothing to do.
+	//
+	// Fixing it by reordering in the MCP layer would leave two transactions and
+	// the same race.
+	//
+	// ErrNoRoot is tolerated: acquiring has never required a registered root, and
+	// a claim from an unregistered one has no liveness to sweep.
+	if err := heartbeat(tx, req.RootID); err != nil && !errors.Is(err, ErrNoRoot) {
+		return nil, err
+	}
+
 	existing, err := activeIn(tx, req.RootID)
 	if err != nil {
 		return nil, err
