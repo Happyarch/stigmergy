@@ -109,6 +109,10 @@ func runDoctorAll(out io.Writer, gc bool) error {
 			_, _ = p.ReapStaleRoots()
 			_, _, _ = p.GC()
 		}
+		// Text that would be refused today is worth surfacing in the sweep too:
+		// the memories most likely to be unreadable are in the projects nobody
+		// has opened lately, which is exactly what this command is for.
+		reportUnreadable(d, p, kp.Label)
 		p.Close()
 
 		switch {
@@ -207,6 +211,7 @@ func runDoctor(out io.Writer, gc bool) error {
 			d.note("%d global memories", n)
 		}
 		repairTimestamps(d, g, "global")
+		reportUnreadable(d, g, "global")
 	}
 
 	fmt.Fprintln(out, "\nThis project")
@@ -292,6 +297,7 @@ func runDoctor(out io.Writer, gc bool) error {
 		d.note("%d project memories", n)
 	}
 	repairTimestamps(d, p, "project")
+	reportUnreadable(d, p, "project")
 	if active, err := p.ActiveClaims(""); err == nil {
 		if len(active) == 0 {
 			d.pass("no claims are currently held")
@@ -511,6 +517,31 @@ func joinWords(words []string) string {
 // A timestamp nobody can parse is a failure rather than a warning: it cannot be
 // ordered, and the memory it belongs to will error on every read until a human
 // decides what the right instant was. There is nothing safe to guess.
+// reportUnreadable names memories whose text would be refused today.
+//
+// A warning and not a failure: these are already stored, they were accepted by
+// the rules in force when they were written, and most are still perfectly
+// legible to a person. The one that is not — a whole document collapsed onto a
+// single line because it was escaped twice — needs an agent that knows what it
+// was meant to say, not a repair pass that guesses.
+func reportUnreadable(d *diag, db *store.DB, scope string) {
+	problems, err := db.UnreadableMemories()
+	if err != nil {
+		d.warn("%s memories could not be checked for unreadable text: %v", scope, err)
+		return
+	}
+	if len(problems) == 0 {
+		return
+	}
+	d.warn("%d %s memory/memories contain text that would be refused today:", len(problems), scope)
+	for _, p := range problems {
+		d.note("%s — %s", p.Key, p.Reason)
+	}
+	d.note("They are readable enough to fix: read each one and write it back with")
+	d.note("memory_write under its current version. Nothing rewrites them automatically,")
+	d.note("because un-escaping a body means guessing what its author meant.")
+}
+
 func repairTimestamps(d *diag, db *store.DB, scope string) {
 	rep, err := db.RepairMemoryTimestamps()
 	if err != nil {

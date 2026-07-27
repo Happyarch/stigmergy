@@ -416,6 +416,15 @@ type MemoryWrite struct {
 	ExpectedVersion *int
 }
 
+// normalize cleans the unambiguous formatting problems before anything is
+// checked or stored: a BOM, CRLF endings, a trailing newline. See text.go for
+// why these are fixed silently while anything ambiguous is refused instead.
+func (w MemoryWrite) normalize() MemoryWrite {
+	w.Description = NormalizeText(w.Description)
+	w.Body = NormalizeText(w.Body)
+	return w
+}
+
 func (w MemoryWrite) validate() error {
 	if err := ValidateKey(w.Key); err != nil {
 		return err
@@ -428,6 +437,15 @@ func (w MemoryWrite) validate() error {
 	}
 	if strings.TrimSpace(w.Body) == "" {
 		return serr.E(serr.InvalidInput, "body must not be empty")
+	}
+	// A memory is written once and read by everyone afterwards, so the moment to
+	// refuse unreadable text is here — while the agent that produced it is still
+	// holding the original and can send it again correctly.
+	if err := ValidateText("description", w.Description, true); err != nil {
+		return err
+	}
+	if err := ValidateText("body", w.Body, false); err != nil {
+		return err
 	}
 	if w.UpdatedBy == "" {
 		return serr.E(serr.InvalidInput, "updated_by must be set")
@@ -448,6 +466,7 @@ type WriteResult struct {
 // error carrying the current entry under the "current" context key, so the
 // agent can merge and retry in one round trip.
 func (d *DB) WriteMemory(w MemoryWrite, kind string) (*WriteResult, error) {
+	w = w.normalize()
 	if err := w.validate(); err != nil {
 		return nil, err
 	}
