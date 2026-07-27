@@ -22,6 +22,21 @@ const (
 	PathGlob    = "glob"
 )
 
+// MaxEvidencePaths caps the patterns one member may declare.
+//
+// Evaluation costs a git subprocess per pattern — checking that each one still
+// matches something is what stops a dead anchor reporting a confident zero — so
+// the cost of an evaluation is linear in a number the declaring agent chooses.
+// A memory_list with drift over a project of such policies multiplies it again,
+// against one shared deadline, and the members that did not finish come back as
+// degraded coverage. Unbounded, a single over-eager policy degrades every other
+// memory's answer.
+//
+// 64 is far above any real policy — the largest declared in this repository has
+// nine — and far below the point where the fan-out matters. A policy that wants
+// more than this is describing a whole subtree and should say so with one glob.
+const MaxEvidencePaths = 64
+
 // EvidencePath is one declared pattern within a member.
 type EvidencePath struct {
 	Kind    string `json:"kind"`
@@ -430,9 +445,25 @@ func validateMembers(members []EvidenceMember) error {
 		if m.BaseOID == "" {
 			return serr.E(serr.InvalidInput, "repository %q has no base commit", m.RepoID)
 		}
+		if len(m.Paths) > MaxEvidencePaths {
+			return serr.E(serr.InvalidInput,
+				"repository %q declares %d paths; the limit is %d. Evaluating costs a git subprocess per pattern, and one policy this large degrades every other memory's answer under the shared deadline. Describe the subtree with a glob instead",
+				m.RepoID, len(m.Paths), MaxEvidencePaths)
+		}
+		seenPath := map[string]bool{}
 		for _, p := range m.Paths {
 			if err := validatePattern(p); err != nil {
 				return err
+			}
+			// Duplicates are refused rather than silently deduplicated. The
+			// storage layer would collapse them (INSERT OR IGNORE against the
+			// primary key) while the returned policy still echoed both, so the
+			// caller would be shown a boundary that is not the one stored.
+			if key := p.Kind + "\x00" + p.Pattern; seenPath[key] {
+				return serr.E(serr.InvalidInput,
+					"repository %q declares the %s pattern %q twice", m.RepoID, p.Kind, p.Pattern)
+			} else {
+				seenPath[key] = true
 			}
 		}
 	}

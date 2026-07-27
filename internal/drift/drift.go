@@ -220,9 +220,21 @@ func evaluateMember(ctx context.Context, gitPath string, m Member) MemberResult 
 	// non-zero means "not an ancestor", while a base object that is absent or
 	// invalid fails differently — and the two must not be collapsed, because one
 	// says the history moved and the other says the baseline is gone.
+	//
+	// The EXIT CODE separates a third case that used to be swallowed by the
+	// second. With --verify --quiet, git exits 1 for an object it cannot resolve
+	// and 128 when the repository itself is unusable — not a repository at all,
+	// unreadable, corrupt. Both used to be reported as missing_base, which told
+	// an agent its baseline had been garbage collected when in fact the directory
+	// was not a git repository. A confidently wrong diagnosis is worse than
+	// git_error, which at least says "look at this".
 	if _, err := git("rev-parse", "--verify", "--quiet", m.BaseOID+"^{commit}"); err != nil {
 		if timedOut() {
 			return fail(out, Timeout, "git did not finish within the deadline")
+		}
+		if exitCode(err) != 1 {
+			return fail(out, GitError,
+				"this repository could not be read: "+gitMessage(err))
 		}
 		return fail(out, MissingBase,
 			"the base commit "+short(m.BaseOID)+" is not in this repository — it may have been garbage collected, or never fetched here")
@@ -266,7 +278,7 @@ func evaluateMember(ctx context.Context, gitPath string, m Member) MemberResult 
 	out.Outcome = Measured
 	out.Count = &n
 	out.CountMode = CountMode
-	out.Warnings = unmatched(git, m)
+	out.Warnings = unmatched(ctx, git, m)
 	return out
 }
 
@@ -280,15 +292,36 @@ func evaluateMember(ctx context.Context, gitPath string, m Member) MemberResult 
 //
 // A too-narrow anchor is otherwise invisible: it undercounts silently and reads
 // as plausibly clean, which is the most expensive failure available here.
-func unmatched(git func(...string) (string, error), m Member) []string {
+// It uses `ls-files --with-tree`, NOT `ls-tree`. ls-tree does not support
+// pathspec magic — `git ls-tree -- ':(top,glob)internal/**'` fails outright with
+// "pathspec magic not supported by this command: 'glob'". Because an error here
+// is deliberately treated as "cannot tell, do not warn", that made this entire
+// check silently inert for every glob pattern: the one kind most likely to be
+// mistyped, and the one where a dead anchor is hardest to spot by eye. It looked
+// like it was working because literal patterns went down the same path and did.
+//
+// `--with-tree=<rev>` unions the index with that tree, so it can only ever match
+// MORE than the tree alone. That asymmetry is the right way round: it can
+// suppress a warning, never invent one, and a false warning is the harmful
+// direction — it teaches agents to widen a pattern that was correct.
+//
+// HEAD is checked first and the loop stops on the first hit, so a live pattern
+// costs one subprocess and only a dead one costs two.
+func unmatched(ctx context.Context, git func(...string) (string, error), m Member) []string {
 	var warnings []string
 	for _, p := range m.Paths {
+		// The count has already succeeded by the time this runs, so a blown
+		// deadline must stop the warning pass rather than grinding through every
+		// remaining pattern to produce advice nobody is waiting for.
+		if ctx.Err() != nil {
+			return warnings
+		}
 		spec := pathspec(p)
 		hit := false
-		for _, rev := range []string{m.BaseOID, "HEAD"} {
-			out, err := git("ls-tree", "-r", "--name-only", rev, "--", spec)
+		for _, rev := range []string{"HEAD", m.BaseOID} {
+			out, err := git("ls-files", "--with-tree="+rev, "--", spec)
 			if err != nil {
-				// Not a warning: an ls-tree that fails says nothing about whether
+				// Not a warning: a lookup that fails says nothing about whether
 				// the pattern was sensible, and guessing here would produce advice
 				// as likely to be wrong as right.
 				hit = true
@@ -305,6 +338,16 @@ func unmatched(git func(...string) (string, error), m Member) []string {
 		}
 	}
 	return warnings
+}
+
+// exitCode reports a command's exit status, or -1 when it failed for a reason
+// that never produced one.
+func exitCode(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
 }
 
 // pathspecs compiles declared patterns into git pathspecs.

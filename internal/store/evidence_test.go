@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/happyarch/stigmergy/internal/serr"
@@ -198,6 +199,82 @@ func TestEvidencePolicyValidation(t *testing.T) {
 				t.Error("a rejected declaration left a policy behind")
 			}
 		})
+	}
+}
+
+// Evaluation costs a subprocess per pattern, so the pattern count is a cost an
+// agent chooses for everyone: memory_list with drift shares one deadline across
+// every policy, and the members that do not finish come back as degraded
+// coverage. One over-eager policy would quietly downgrade every other memory's
+// answer.
+func TestTooManyPathsAreRefused(t *testing.T) {
+	db := evidenceDB(t)
+
+	atLimit := make([]EvidencePath, MaxEvidencePaths)
+	for i := range atLimit {
+		atLimit[i] = EvidencePath{Kind: PathLiteral, Pattern: fmt.Sprintf("f%d.go", i)}
+	}
+	if _, err := set(t, db, EvidenceSet{
+		ExpectedMemoryVersion: 1,
+		Members:               []EvidenceMember{{RepoID: "app", BaseOID: "a", Paths: atLimit}},
+	}); err != nil {
+		t.Fatalf("exactly the limit was refused: %v", err)
+	}
+
+	over := append(atLimit, EvidencePath{Kind: PathLiteral, Pattern: "one-too-many.go"})
+	_, err := set(t, db, EvidenceSet{
+		ExpectedMemoryVersion: 1, ExpectedPolicyVersion: intp(1),
+		Members: []EvidenceMember{{RepoID: "app", BaseOID: "a", Paths: over}},
+	})
+	requireCode(t, err, serr.InvalidInput)
+}
+
+// A duplicate would be collapsed by the primary key on insert while the returned
+// policy still echoed both — showing the caller a boundary that is not the one
+// stored. Refusing is the only way those two stay the same thing.
+func TestADuplicatePatternIsRefused(t *testing.T) {
+	db := evidenceDB(t)
+	_, err := set(t, db, EvidenceSet{
+		ExpectedMemoryVersion: 1,
+		Members: []EvidenceMember{{RepoID: "app", BaseOID: "a", Paths: []EvidencePath{
+			{Kind: PathGlob, Pattern: "internal/**"},
+			{Kind: PathGlob, Pattern: "internal/**"},
+		}}},
+	})
+	requireCode(t, err, serr.InvalidInput)
+
+	// Same pattern under a different kind is NOT a duplicate: they compile to
+	// different pathspecs and mean different things.
+	if _, err := set(t, db, EvidenceSet{
+		ExpectedMemoryVersion: 1,
+		Members: []EvidenceMember{{RepoID: "app", BaseOID: "a", Paths: []EvidencePath{
+			{Kind: PathGlob, Pattern: "internal"},
+			{Kind: PathLiteral, Pattern: "internal"},
+		}}},
+	}); err != nil {
+		t.Fatalf("two kinds of the same pattern were refused as duplicates: %v", err)
+	}
+}
+
+// What is returned must be what was stored, or the echoed boundary is a lie.
+func TestTheReturnedPolicyMatchesWhatWasStored(t *testing.T) {
+	db := evidenceDB(t)
+	returned, err := set(t, db, EvidenceSet{
+		ExpectedMemoryVersion: 1,
+		Members: []EvidenceMember{{RepoID: "app", BaseOID: "a", Paths: []EvidencePath{
+			{Kind: PathGlob, Pattern: "internal/**"},
+			{Kind: PathLiteral, Pattern: "go.mod"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := db.ReadEvidencePolicy("wire-format")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(returned.Members[0].Paths) != len(stored.Members[0].Paths) {
+		t.Fatalf("returned %d paths, stored %d", len(returned.Members[0].Paths), len(stored.Members[0].Paths))
 	}
 }
 
