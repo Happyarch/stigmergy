@@ -73,6 +73,17 @@ func New(version, globalPath string) (*mcp.Server, *Session) {
 	}, s.memoryPromote)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memory_evidence_set",
+		Description: "Declare which repositories and paths to observe for changes when assessing a memory, and capture the commits to compare from. " +
+			"This records where to look; it is not a claim about what the memory means, and calling it verifies nothing.",
+	}, s.memoryEvidenceSet)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "memory_evidence_clear",
+		Description: "Remove a memory's evidence policy. Its accumulated baselines go with it.",
+	}, s.memoryEvidenceClear)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "memory_delete",
 		Description: "Permanently delete a memory. Requires its current version, and is audited.",
 	}, s.memoryDelete)

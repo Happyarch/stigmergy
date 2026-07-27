@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -90,15 +91,28 @@ type MemoryListInput struct {
 	UpdatedSince  string `json:"updated_since,omitempty" jsonschema:"RFC3339; only entries last changed at or after this"`
 	UpdatedBefore string `json:"updated_before,omitempty" jsonschema:"RFC3339; only entries last changed at or before this"`
 	OrderBy       string `json:"order_by,omitempty" jsonschema:"key (default) or recent (most recently changed first)"`
+	// IncludeDrift is named for what it returns. "include_freshness" would
+	// promise a verdict nothing here emits.
+	IncludeDrift bool `json:"include_drift,omitempty" jsonschema:"project only; report what has CHANGED in each memory's declared scope. Not a freshness verdict"`
+}
+
+// MemoryListEntry is an index entry, optionally carrying change evidence.
+//
+// store.IndexEntry is embedded rather than copied, so its JSON fields are
+// promoted and the shape agents already parse is unchanged — evidence is purely
+// additive.
+type MemoryListEntry struct {
+	store.IndexEntry
+	Evidence *EvidenceInfo `json:"evidence,omitempty"`
 }
 
 // MemoryListOutput is bodyless on purpose: an index tells an agent what exists
 // and what to read, without spending its context on every body.
 type MemoryListOutput struct {
-	Entries []store.IndexEntry `json:"entries"`
+	Entries []MemoryListEntry `json:"entries"`
 }
 
-func (s *Session) memoryList(_ context.Context, _ *mcp.CallToolRequest, in MemoryListInput) (*mcp.CallToolResult, MemoryListOutput, error) {
+func (s *Session) memoryList(ctx context.Context, _ *mcp.CallToolRequest, in MemoryListInput) (*mcp.CallToolResult, MemoryListOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireOpened(); err != nil {
@@ -108,6 +122,9 @@ func (s *Session) memoryList(_ context.Context, _ *mcp.CallToolRequest, in Memor
 	if err != nil {
 		return nil, MemoryListOutput{}, toolError(err)
 	}
+	if in.IncludeDrift && db.Kind != store.Project {
+		return nil, MemoryListOutput{}, toolError(evidenceUnsupported(in.Scope))
+	}
 	entries, err := db.QueryMemories(store.MemoryQuery{
 		UpdatedSince:  in.UpdatedSince,
 		UpdatedBefore: in.UpdatedBefore,
@@ -116,8 +133,34 @@ func (s *Session) memoryList(_ context.Context, _ *mcp.CallToolRequest, in Memor
 	if err != nil {
 		return nil, MemoryListOutput{}, toolError(err)
 	}
+
+	out := MemoryListOutput{Entries: make([]MemoryListEntry, 0, len(entries))}
+	for _, e := range entries {
+		out.Entries = append(out.Entries, MemoryListEntry{IndexEntry: e})
+	}
+	if in.IncludeDrift {
+		policies, err := db.EvidencePolicies()
+		if err != nil {
+			return nil, MemoryListOutput{}, toolError(err)
+		}
+		keys := make([]string, 0, len(entries))
+		for _, e := range entries {
+			keys = append(keys, e.Key)
+		}
+		evidence := s.evaluateEvidence(ctx, policies, keys)
+		for i := range out.Entries {
+			// Every entry gets a record, including those with no policy. An
+			// omitted field would be indistinguishable from "drift was never
+			// asked for", which is the one ambiguity this flag exists to remove.
+			if ev, ok := evidence[out.Entries[i].Key]; ok {
+				out.Entries[i].Evidence = ev
+			} else {
+				out.Entries[i].Evidence = notConfigured()
+			}
+		}
+	}
 	s.touch()
-	return nil, MemoryListOutput{Entries: entries}, nil
+	return nil, out, nil
 }
 
 // MemoryWriteInput is a compare-and-swap write.
@@ -138,6 +181,9 @@ type MemoryWriteOutput struct {
 	// notice that an entry covering this ground already exists under another
 	// key, before the two versions of the truth drift apart.
 	Similar []store.IndexEntry `json:"similar,omitempty"`
+	// Note appears only on an update to a memory that has an evidence policy,
+	// to say that its baseline was deliberately left alone.
+	Note string `json:"note,omitempty"`
 }
 
 func (s *Session) memoryWrite(_ context.Context, _ *mcp.CallToolRequest, in MemoryWriteInput) (*mcp.CallToolResult, MemoryWriteOutput, error) {
@@ -175,6 +221,12 @@ func (s *Session) memoryWrite(_ context.Context, _ *mcp.CallToolRequest, in Memo
 			}
 		}
 	}
+	// An update to a memory that has an evidence policy says so. A create never
+	// can — the policy is attached afterwards — and a memory without one has
+	// nothing to report, so the note stays rare enough to be read.
+	if !res.Created && db.Kind == store.Project && db.HasEvidencePolicy(res.Memory.Key) {
+		out.Note = baselineNote(res.Memory.Key)
+	}
 	return nil, out, nil
 }
 
@@ -190,6 +242,8 @@ type MemoryPromoteInput struct {
 type MemoryPromoteOutput struct {
 	Created bool          `json:"created"`
 	Global  *store.Memory `json:"global"`
+	// Note appears when the source had an evidence policy, which is not copied.
+	Note string `json:"note,omitempty"`
 }
 
 func (s *Session) memoryPromote(_ context.Context, _ *mcp.CallToolRequest, in MemoryPromoteInput) (*mcp.CallToolResult, MemoryPromoteOutput, error) {
@@ -211,7 +265,17 @@ func (s *Session) memoryPromote(_ context.Context, _ *mcp.CallToolRequest, in Me
 		return nil, MemoryPromoteOutput{}, toolError(err)
 	}
 	s.touch()
-	return nil, MemoryPromoteOutput{Created: res.Created, Global: res.Global}, nil
+	out := MemoryPromoteOutput{Created: res.Created, Global: res.Global}
+	// Promotion copies content only. An evidence policy is project-local
+	// observation configuration and not part of what the memory asserts, so it
+	// stays on the source — and git evidence is undefined in the global scope
+	// anyway. The wording is "not copied", never "lost".
+	if s.project.HasEvidencePolicy(in.Key) {
+		out.Note = fmt.Sprintf(
+			"Content promoted. Git evidence is project-only and was not copied; the source policy remains on project:%s.",
+			in.Key)
+	}
+	return nil, out, nil
 }
 
 // MemoryDeleteInput removes an entry for good.

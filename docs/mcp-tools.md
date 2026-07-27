@@ -272,9 +272,11 @@ A missing key is **not an error** — it is a normal answer, `{"found": false}`.
 | `updated_since` | string | no | RFC3339; last changed at or after this — **inclusive** |
 | `updated_before` | string | no | RFC3339; last changed at or before this — **inclusive** |
 | `order_by` | string | no | `key` (default) or `recent` |
+| `include_drift` | bool | no | project scope only; adds `evidence` to each entry |
 | | | | State: **Opened** |
 
-**Returns** `entries[]`: `key`, `type`, `description`, `version`, `updated_at`.
+**Returns** `entries[]`: `key`, `type`, `description`, `version`, `updated_at`, and
+— when `include_drift` is set — `evidence`. See [Change evidence](#change-evidence).
 
 `recent` orders by last change, newest first, with a `key` tie-break — memories
 written in a single call share a timestamp to the nanosecond, and an unstable
@@ -312,6 +314,12 @@ Those suggestions are computed *before* the write, and they are the anti-duplica
 nudge: the most likely reason an agent is creating `auth-notes` is that it forgot
 about `authentication-conventions`.
 
+On an **update to a memory that has an evidence policy**, `note` says the baseline
+was left alone. It is not re-captured, ever, and that is a deliberate asymmetry: a
+stale baseline over-reports change, which you can see and argue with, while a reset
+one under-reports, which is invisible. Re-capturing on every write would mean a
+typo fix silently erased all the evidence accumulated since.
+
 **Errors** — `wrong_state`; `invalid_input` (bad scope, key, type, empty
 description or body, `expected_version < 1`); `cas_conflict` (carrying `current`).
 
@@ -340,10 +348,136 @@ key — that is how you end up with two half-true memories instead of one true o
 | `expected_global_version` | int | no | omit if the global key is new |
 | | | | State: **Registered** |
 
-**Returns** `created` (bool), `global` (the resulting global memory).
+**Returns** `created` (bool), `global` (the resulting global memory), and `note`
+when the source had an evidence policy.
 
 A **copy, not a move** — the project memory stays. Both sides are CAS-checked, and
 the global write happens first: if it fails, nothing has changed anywhere.
+
+An evidence policy is **not copied**, and the source keeps its own. A policy is
+project-local observation configuration rather than part of what the memory
+asserts, and git evidence has no meaning in the global scope — there is no
+repository there to observe.
+
+## Change evidence
+
+Three pieces: `memory_evidence_set` declares where to look, `memory_evidence_clear`
+takes it away, and `memory_list(include_drift: true)` reports what it found.
+
+**What this is.** A record of what has *changed* in a declared scope since a
+recorded commit. Raw components, inspectable, with the boundary that produced them
+echoed back.
+
+**What it is not.** A freshness score, a staleness verdict, a ranking, or a
+probability. The strongest statement available anywhere in this system is *"no
+observed changes within the declared policy, at this coverage"* — never "fresh". A
+memory can be untouched by every commit in the range and still be false, and a
+repository can churn under a memory that stays exactly true. Declaring a policy
+verifies nothing, and neither does reading the result.
+
+### `memory_evidence_set`
+
+> Declare which repositories and paths to observe, and capture the commits to compare from.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `key` | string | yes | the project memory |
+| `expected_memory_version` | int | yes | **always**, even when creating a policy |
+| `expected_policy_version` | int | no | omit only when no policy exists yet |
+| `repos[]` | object | no | `repo` plus optional `paths[]`; omit only in a single-repository project |
+| `repos[].paths[]` | object | no | `kind` (`literal` or `glob`) and `pattern` |
+| | | | State: **Registered** |
+
+**Returns** `policy` (members, base commits, declared paths) and a `note`.
+
+Both versions are compare-and-swapped, for different reasons. The policy version
+stops two agents racing. The **memory** version stops a baseline being pinned to a
+proposition the caller never read — evidence attached to a memory that has since
+been rewritten measures the wrong claim while looking perfectly well-formed.
+
+**Declaring no paths observes the whole repository**, and that is the recommended
+default. Paths are a precision refinement. A too-narrow anchor undercounts silently
+and reads as plausibly clean, which is the most expensive failure available here —
+so patterns that match nothing in *either* the base or the current tree come back
+as a warning. A path that existed at the base and was deleted since is *evidence*,
+not a bad anchor, and is not warned about.
+
+Patterns are compiled into git pathspecs and never passed raw: `literal` becomes
+`:(top,literal)`, `glob` becomes `:(top,glob)`. So a leading colon in a filename is
+part of the name rather than pathspec magic, and `*` does not cross directory
+separators — use `**` for that.
+
+Capture is **all or nothing**. If any declared repository's HEAD cannot be resolved,
+nothing is stored at all: half a baseline under-reports forever and is
+indistinguishable from a repository that simply has not changed.
+
+**Errors** — `wrong_state`; `invalid_input` (unknown repository, no members, a
+repository named twice, an absolute or `..` pattern, an unreachable checkout);
+`cas_conflict` (carrying `current` and `current_policy_version`).
+
+### `memory_evidence_clear`
+
+| Parameter | Type | Required |
+|---|---|---|
+| `key` | string | yes |
+| `expected_memory_version` | int | yes |
+| `expected_policy_version` | int | yes |
+| | | State: **Registered** |
+
+Both versions again, and for the same reason: an agent working from an older
+proposition must not be able to strip the evidence off a memory someone else has
+since rewritten. The baselines go with the policy.
+
+### The `evidence` record
+
+```jsonc
+{
+  "configured": true,
+  "state": "evaluated",              // not_configured | evaluated
+  "policy_version": 3,
+  "measured_at": "…",
+  "coverage": "complete",            // complete | partial | unavailable
+  "members": [
+    { "repo": "app",
+      "outcome": "measured",         // measured | non_ancestor | missing_base | shallow |
+                                     // missing_worktree | timeout | git_error
+      "base_oid": "…", "head_oid": "…",
+      "count": 212,
+      "count_mode": "git full-history path-limited commit count",
+      "paths": [ {"kind": "glob", "pattern": "internal/**"} ],
+      "warnings": ["pattern \"docs/x\" matched nothing …"] }
+  ]
+}
+```
+
+`configured` and `coverage` are **independent axes**. "This memory declares nothing
+to observe" and "what it declares could not be observed this time" are different
+facts, and conflating them is how *2 of 3 measured* gets read with the confidence of
+*3 of 3*. A memory with no policy still returns a record — `configured: false`,
+`state: "not_configured"`, no `coverage` — because an omitted field would be
+indistinguishable from "drift was never asked for".
+
+`count_mode` travels with every count and names it precisely. It is **not** "commits
+touching these paths": under path limiting git applies history simplification, so a
+trivial merge may be omitted while the commits it merged are counted, and a
+conflict-resolution merge that touches the paths counts itself. That is documented
+git behaviour, not a stable unit of integration events — which is why no threshold
+is defined anywhere, and why counts are not comparable between a squash-merge
+repository and a micro-commit one.
+
+Everything is measured by **reachability** from the stored commit, never by date.
+Rebase, cherry-pick and fast-forward all land commits after a baseline carrying
+dates from before it, so a date window silently misses real change.
+
+`non_ancestor` means the baseline is no longer reachable from HEAD. The causes — a
+branch switch, a reset, a force-push — are listed as possibilities and never as
+findings, because `merge-base` cannot tell them apart. No count is possible across
+that break. `missing_base` is a different thing and is kept separate: the baseline
+object is not in the repository at all.
+
+Coverage is recomputed every time and never cached. Consecutive calls may
+legitimately disagree, which is acceptable precisely because coverage and the
+per-member outcomes are reported alongside the numbers instead of folded into them.
 
 Promote what is true of you or your machine *everywhere*. Leave repo-specific facts
 in the project scope.

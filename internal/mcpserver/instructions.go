@@ -38,6 +38,7 @@ Memories
 - memory_list also takes updated_since / updated_before (RFC3339, both inclusive) and order_by "recent". These are last-CHANGE times, not last-checked times: nothing here records when anyone verified a memory, so a long-untouched entry is a candidate for a look, never a verdict that it has gone stale.
 - memory_promote copies a project memory to global. Promote what is true of you or your machine everywhere; leave repo-specific facts in the project scope.
 - memory_delete(scope, key, expected_version) hard-deletes. It is audited.
+- memory_evidence_set(key, expected_memory_version, repos) records which repositories and paths to watch for a memory, and the commits to compare from. memory_list(include_drift) then reports what has CHANGED in that scope since. Declaring no paths watches the whole repository, which is the safe default; a too-narrow scope reports a confident zero while observing nothing. This measures change, never truth: it cannot tell you a memory is still correct, and calling it verifies nothing. Editing a memory deliberately does NOT move its baseline — recapture explicitly if an edit reasserts the claim.
 - Good memories are durable and non-obvious: conventions, decisions, constraints, preferences. Not things the code or git history already says.
 
 Claims
