@@ -56,6 +56,17 @@ func Normalize(worktree, cwd, path string) (string, error) {
 	return rel, nil
 }
 
+// Resolve turns an absolute path into its symlink-free form, tolerating a file
+// that does not exist yet.
+//
+// Exported for the claim guard, which has to decide which repository a path
+// belongs to BEFORE it knows the worktree to normalise against. That placement
+// is a cheap string comparison and cannot see a symlink, so when it finds
+// nothing it asks here rather than concluding the path is ungoverned.
+func Resolve(path string) (string, error) {
+	return resolveExisting(filepath.Clean(path))
+}
+
 // resolveExisting resolves symlinks in a path that may not exist yet.
 //
 // EvalSymlinks fails outright on a missing path, but agents constantly write

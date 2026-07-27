@@ -87,6 +87,22 @@ func guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
 		}
 		member := p.Project.Containing(abs)
 		if member == nil {
+			// Containing is a string comparison and knows nothing about symlinks,
+			// so a path that reaches into this project under another name looks
+			// like it is outside it — and "outside" means allow. A link in /tmp
+			// pointing at a claimed file was therefore writable while the file
+			// itself was blocked, which is a fail-OPEN in the one component whose
+			// entire job is to fail closed.
+			//
+			// Resolving is only paid for when the cheap placement finds nothing.
+			// For an agent editing inside its own project that is never; for one
+			// writing to /tmp it is a couple of Lstat calls, which is affordable
+			// on a path this hot precisely because it is the rare branch.
+			if resolved, rerr := paths.Resolve(abs); rerr == nil && resolved != abs {
+				member = p.Project.Containing(resolved)
+			}
+		}
+		if member == nil {
 			continue // Outside every repository of this project: not ours to govern.
 		}
 		rel, err := paths.Normalize(member.WorktreeRoot, cwd, edit)
