@@ -270,6 +270,117 @@ type TimestampRepair struct {
 	Bad      []string // keys whose timestamps could not be parsed, left untouched
 }
 
+// stampColumns are the timestamp columns outside `memories`, and the reason this
+// list exists rather than only the memory one.
+//
+// Every one of these is compared as raw TEXT in SQL, which is only correct while
+// every value is the same fixed width — that is what TimeLayout is for. A single
+// short-form value skews its comparisons: "…:00Z" sorts ABOVE "…:00.000000000Z"
+// because 'Z' beats '.', so a row can read as newer than rows written after it.
+//
+// For most of these the consequence is cosmetic. For two it is not:
+//
+//	claims.expires_at    decides whether a claim still binds. A value that
+//	                     compares as newer than it is means a claim that never
+//	                     expires and goes on blocking every other agent.
+//	roots.last_seen_at   decides whether a root is alive, and therefore whether
+//	                     its claims are swept and whether it can be written to.
+//
+// Nothing writes a non-canonical stamp today — every path goes through Now() —
+// so this is a repair for what older versions and outside writers left behind,
+// and a backstop if a future one regresses. One such value exists on this
+// machine, in the global audit log.
+var stampColumns = []struct{ table, key, column string }{
+	{"audit_log", "id", "at"},
+	{"claims", "id", "created_at"},
+	{"claims", "id", "expires_at"},
+	{"claims", "id", "released_at"},
+	{"roots", "root_id", "registered_at"},
+	{"roots", "root_id", "last_seen_at"},
+	{"roots", "root_id", "ended_at"},
+	{"mailbox_messages", "id", "sent_at"},
+	{"mailbox_messages", "id", "read_at"},
+	{"mailbox_messages", "id", "notified_at"},
+	{"mailbox_threads", "id", "created_at"},
+	{"mailbox_threads", "id", "updated_at"},
+}
+
+// RepairStampColumns canonicalises timestamps outside the memory tables.
+//
+// Deliberately separate from RepairMemoryTimestamps: a memory is content an
+// agent wrote and is reported by key, while these are the system's own
+// bookkeeping and are reported only as a count. The repair is the same lossless
+// rewrite either way — the instant is preserved exactly, only its spelling
+// changes — and it touches nothing else about the row.
+//
+// A column the schema does not have is skipped rather than failing: this runs
+// against the global database too, which has only some of these tables.
+func (d *DB) RepairStampColumns() (TimestampRepair, error) {
+	var rep TimestampRepair
+	for _, c := range stampColumns {
+		n, err := d.repairColumn(c.table, c.key, c.column)
+		if err != nil {
+			return rep, err
+		}
+		rep.Repaired += n
+	}
+	return rep, nil
+}
+
+func (d *DB) repairColumn(table, key, column string) (int, error) {
+	rows, err := d.Query(fmt.Sprintf(
+		`SELECT %s, %s FROM %s WHERE %s IS NOT NULL AND %s != ''`, key, column, table, column, column))
+	if err != nil {
+		// Almost always "no such table" in the scope that does not have it.
+		return 0, nil
+	}
+	type fix struct {
+		id    any
+		value string
+	}
+	var fixes []fix
+	for rows.Next() {
+		var id any
+		var raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return 0, serr.Internalf(err, "failed to read %s.%s", table, column)
+		}
+		canonical, err := CanonicalStamp(raw)
+		if err != nil {
+			// Unreadable: left alone, exactly as for memories. There is no safe
+			// instant to invent, and doctor reports the count.
+			continue
+		}
+		if canonical != raw {
+			fixes = append(fixes, fix{id, canonical})
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, serr.Internalf(err, "failed to read %s.%s", table, column)
+	}
+	if len(fixes) == 0 {
+		return 0, nil
+	}
+
+	tx, err := d.Begin()
+	if err != nil {
+		return 0, serr.Internalf(err, "failed to begin transaction")
+	}
+	defer tx.Rollback()
+	for _, f := range fixes {
+		if _, err := tx.Exec(fmt.Sprintf(
+			`UPDATE %s SET %s = ? WHERE %s = ?`, table, column, key), f.value, f.id); err != nil {
+			return 0, serr.Internalf(err, "failed to repair %s.%s", table, column)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, serr.Internalf(err, "failed to commit %s.%s repairs", table, column)
+	}
+	return len(fixes), nil
+}
+
 // RepairMemoryTimestamps rewrites parseable non-canonical timestamps in place.
 //
 // It is lossless — the instant is preserved exactly, only its rendering

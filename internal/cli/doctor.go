@@ -551,6 +551,15 @@ func repairTimestamps(d *diag, db *store.DB, scope string) {
 	if rep.Repaired > 0 {
 		d.pass("%d %s memory timestamp(s) rewritten in canonical form", rep.Repaired, scope)
 	}
+	// The same fixed-width requirement applies to every timestamp compared in
+	// SQL, and two of them decide whether a claim still binds and whether a root
+	// is alive. Reported as a count: these are the system's own bookkeeping
+	// rather than anything an agent wrote.
+	if other, err := db.RepairStampColumns(); err != nil {
+		d.warn("%s bookkeeping timestamps could not be repaired: %v", scope, err)
+	} else if other.Repaired > 0 {
+		d.pass("%d %s claim/root/mail timestamp(s) rewritten in canonical form", other.Repaired, scope)
+	}
 	if len(rep.Bad) > 0 {
 		d.fail("%d %s memory timestamp(s) are unreadable: %s", len(rep.Bad), scope, strings.Join(rep.Bad, ", "))
 		d.note("Reading these memories fails. They were left untouched — no instant can be")
