@@ -865,6 +865,14 @@ mark someone else's messages read.
 **Returns** the `thread`. Any *participant* may resolve — a negotiation is not
 owned by whoever opened it. A non-participant gets `not_owner`.
 
+**A later message REOPENS the thread**, clearing the resolution. Closing says the
+matter is settled; a new message says it is not, and the more recent claim about
+the same question wins. This is not merely tidiness: a thread left `resolved`
+while carrying live messages disappears from every open-thread listing, and the
+stalled-thread warning only fires on open threads — so an agent waiting for a
+reply in a silently-closed conversation would never be told that the other side
+had died. Reopening is recorded in the audit log as `mailbox_reopen`.
+
 ---
 
 ## Server instructions

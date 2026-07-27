@@ -128,7 +128,36 @@ func (d *DB) SendMessage(req SendRequest) (*Message, error) {
 		if err != nil {
 			return nil, serr.Internalf(err, "failed to look up the thread")
 		}
-		if _, err := tx.Exec(`UPDATE mailbox_threads SET updated_at = ? WHERE id = ?`, now, threadID); err != nil {
+		// A message into a settled thread REOPENS it. The state was read here and
+		// then thrown away, which is worse than not reading it: it looks like a
+		// check.
+		//
+		// Resolving says the matter is closed; a new message says it is not, and
+		// the message wins because it is the more recent claim about the same
+		// question. Leaving the thread resolved made a live conversation invisible
+		// — it dropped out of every open-thread listing, and Stalled() requires
+		// ThreadOpen, so the "no answer is coming, that agent is gone" warning
+		// could never fire for it. An agent waiting on a reply in a reopened
+		// thread would wait forever, which is the exact failure the stalled-thread
+		// machinery was built to prevent.
+		//
+		// Unlike a claim, reviving a thread endangers nobody: there is no second
+		// party whose safety depended on it staying shut. The resolution text goes,
+		// because a settlement that did not settle anything is worse than none.
+		if state != ThreadOpen {
+			if _, err := tx.Exec(
+				`UPDATE mailbox_threads SET state = ?, resolution = NULL, updated_at = ? WHERE id = ?`,
+				ThreadOpen, now, threadID); err != nil {
+				return nil, serr.Internalf(err, "failed to reopen the thread")
+			}
+			if err := audit(tx, AuditEntry{
+				Actor: req.FromRoot, Action: "mailbox_reopen",
+				Detail: fmt.Sprintf("thread=%d was %s", threadID, state),
+			}); err != nil {
+				return nil, serr.Internalf(err, "failed to write audit record")
+			}
+		} else if _, err := tx.Exec(
+			`UPDATE mailbox_threads SET updated_at = ? WHERE id = ?`, now, threadID); err != nil {
 			return nil, serr.Internalf(err, "failed to update the thread")
 		}
 	} else {
