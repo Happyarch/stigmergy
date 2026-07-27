@@ -495,17 +495,39 @@ change evidence rather than a freshness verdict.
 - Shallow detection at **`CommonDir/shallow`** — `.git` is a *file* in a linked
   worktree. `project.Member` already carries `CommonDir`.
 
-## 16. Stage 3 — deferred, explicitly
+## 16. Stage 3 — the outcome log is BUILT; the ranking is not
 
-Explicit `reaffirm` / `revise` / `refute` operations recording real outcomes
-against Stage 2 evidence. Only once that history exists can anyone ask whether
-repo-relative thresholds or an upkeep ranking are defensible; prior volatility
-and corroboration history are candidate signals at that point, not before.
-§5's missing impact and cost terms may well remain agent judgment rather than schema.
+Stage 3 always had two halves, and they have very different prerequisites.
 
-The intended end-state lifecycle — assert → accumulate evidence → reaffirm /
-revise / refute — is **hypothetical** until then, and no part of Stages 1–2
-presumes it.
+**Built** (migration 0009, `memory_verification`): explicit `reaffirmed` /
+`revised` / `refuted` operations recording real outcomes, each carrying the
+memory version assessed, the evidence policy version in force, and a **snapshot
+of the Stage 2 evidence exactly as it stood**. This is what finally gives §2's
+ontological ideal a real referent: `at` on a `reaffirmed` row is an **assertion
+time**, the thing this schema has never stored. Append-only, never inferred from
+a write (§7), never pruned by GC — a retention window would cap the history at
+the moment it started being useful.
+
+The evidence is snapshotted rather than recomputed on read because an outcome is
+only interpretable against what the observer could see. Re-running the
+measurement later answers a different question: HEAD has moved and every count
+with it.
+
+**Not built, and still undecidable**: thresholds, an upkeep ranking, any priority
+ordering. Those need what §5 and §11 say is missing — a portable unit, an impact
+term, a verification-cost term — and now also need enough rows in this table to
+calibrate against. Two further cautions for whoever attempts it:
+
+- The sampling is **selected, not random**. Agents verify what they already
+  suspect, so the refuted rate here is not the refuted rate in the world. Any fit
+  must model that bias explicitly.
+- Prior volatility and corroboration history become *candidate* signals only once
+  there is history to test them against — listing them as active quantities
+  before that is the §8 error one level up.
+
+The end-state lifecycle — assert → accumulate evidence → reaffirm / revise /
+refute — is no longer hypothetical. Nothing in Stages 1–2 presumes it, and
+nothing yet ranks on it.
 
 ## 17. Verification
 

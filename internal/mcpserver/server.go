@@ -84,6 +84,17 @@ func New(version, globalPath string) (*mcp.Server, *Session) {
 	}, s.memoryEvidenceClear)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memory_verify",
+		Description: "Record that you actually checked a memory, and what you concluded: reaffirmed, revised, or refuted. " +
+			"This is the only thing that records when a memory was last CHECKED, as opposed to when it last changed. It is never inferred from an edit.",
+	}, s.memoryVerify)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "memory_history",
+		Description: "Read one memory's verification history: who checked it, when, what they concluded, and the evidence they saw.",
+	}, s.memoryHistory)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "memory_delete",
 		Description: "Permanently delete a memory. Requires its current version, and is audited.",
 	}, s.memoryDelete)

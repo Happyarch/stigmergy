@@ -39,6 +39,7 @@ Memories
 - memory_promote copies a project memory to global. Promote what is true of you or your machine everywhere; leave repo-specific facts in the project scope.
 - memory_delete(scope, key, expected_version) hard-deletes. It is audited.
 - memory_evidence_set(key, expected_memory_version, repos) records which repositories and paths to watch for a memory, and the commits to compare from. memory_list(include_drift) then reports what has CHANGED in that scope since. Declaring no paths watches the whole repository, which is the safe default; a too-narrow scope reports a confident zero while observing nothing. This measures change, never truth: it cannot tell you a memory is still correct, and calling it verifies nothing. Editing a memory deliberately does NOT move its baseline — recapture explicitly if an edit reasserts the claim.
+- memory_verify(key, outcome, expected_memory_version, reason) records that you actually CHECKED a memory: "reaffirmed", "revised" or "refuted". Nothing infers this — not an edit, not a read — so if you verify something and say nothing, the next agent has no way to know it was ever checked. It is the only timestamp here that means "someone looked" rather than "bytes changed". Refuting deletes nothing; it records what you found. memory_list(include_verification) and memory_history(key) read it back.
 - Good memories are durable and non-obvious: conventions, decisions, constraints, preferences. Not things the code or git history already says.
 
 Claims

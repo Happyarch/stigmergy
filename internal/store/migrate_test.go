@@ -80,6 +80,9 @@ func TestRestoringIndexesOnADatabaseThatAlreadyLostThem(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE repos`); err != nil {
 		t.Fatalf("undoing 0007 (table): %v", err)
 	}
+	if _, err := db.Exec(`DROP TABLE memory_verification`); err != nil {
+		t.Fatalf("undoing 0009: %v", err)
+	}
 	// 0008 in reverse order of creation: the children reference the parent.
 	for _, tbl := range []string{"memory_evidence_path", "memory_evidence_member", "memory_evidence_policy"} {
 		if _, err := db.Exec(`DROP TABLE ` + tbl); err != nil {

@@ -94,6 +94,9 @@ type MemoryListInput struct {
 	// IncludeDrift is named for what it returns. "include_freshness" would
 	// promise a verdict nothing here emits.
 	IncludeDrift bool `json:"include_drift,omitempty" jsonschema:"project only; report what has CHANGED in each memory's declared scope. Not a freshness verdict"`
+	// IncludeVerification reports when anyone last CHECKED each memory, which is
+	// a different question from when it last changed.
+	IncludeVerification bool `json:"include_verification,omitempty" jsonschema:"project only; the last recorded verification outcome and the counts so far"`
 }
 
 // MemoryListEntry is an index entry, optionally carrying change evidence.
@@ -104,6 +107,10 @@ type MemoryListInput struct {
 type MemoryListEntry struct {
 	store.IndexEntry
 	Evidence *EvidenceInfo `json:"evidence,omitempty"`
+	// Verification is the last time anyone said they checked this, and what they
+	// concluded. Like Evidence it is always present when asked for, so "nobody
+	// has ever checked" is a value rather than a missing field.
+	Verification *store.VerificationSummary `json:"verification,omitempty"`
 }
 
 // MemoryListOutput is bodyless on purpose: an index tells an agent what exists
@@ -124,6 +131,9 @@ func (s *Session) memoryList(ctx context.Context, _ *mcp.CallToolRequest, in Mem
 	}
 	if in.IncludeDrift && db.Kind != store.Project {
 		return nil, MemoryListOutput{}, toolError(evidenceUnsupported(in.Scope))
+	}
+	if in.IncludeVerification && db.Kind != store.Project {
+		return nil, MemoryListOutput{}, toolError(verificationUnsupported(in.Scope))
 	}
 	entries, err := db.QueryMemories(store.MemoryQuery{
 		UpdatedSince:  in.UpdatedSince,
@@ -156,6 +166,22 @@ func (s *Session) memoryList(ctx context.Context, _ *mcp.CallToolRequest, in Mem
 				out.Entries[i].Evidence = ev
 			} else {
 				out.Entries[i].Evidence = notConfigured()
+			}
+		}
+	}
+	if in.IncludeVerification {
+		summaries, err := db.VerificationSummaries()
+		if err != nil {
+			return nil, MemoryListOutput{}, toolError(err)
+		}
+		for i := range out.Entries {
+			// A memory nobody has ever checked reports an empty summary rather
+			// than nothing at all — the same rule as evidence, for the same
+			// reason: silence is indistinguishable from "never asked".
+			if sum, ok := summaries[out.Entries[i].Key]; ok {
+				out.Entries[i].Verification = sum
+			} else {
+				out.Entries[i].Verification = &store.VerificationSummary{}
 			}
 		}
 	}

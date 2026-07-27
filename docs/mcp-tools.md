@@ -273,10 +273,16 @@ A missing key is **not an error** — it is a normal answer, `{"found": false}`.
 | `updated_before` | string | no | RFC3339; last changed at or before this — **inclusive** |
 | `order_by` | string | no | `key` (default) or `recent` |
 | `include_drift` | bool | no | project scope only; adds `evidence` to each entry |
+| `include_verification` | bool | no | project scope only; adds `verification` to each entry |
 | | | | State: **Opened** |
 
-**Returns** `entries[]`: `key`, `type`, `description`, `version`, `updated_at`, and
-— when `include_drift` is set — `evidence`. See [Change evidence](#change-evidence).
+**Returns** `entries[]`: `key`, `type`, `description`, `version`, `updated_at`, plus
+`evidence` and `verification` when asked for. See [Change evidence](#change-evidence)
+and [Verification](#verification).
+
+There is deliberately **no ordering by how stale or unverified something is**. No
+threshold, ranking or priority exists anywhere in this system — see the note at the
+end of [Verification](#verification) for why not yet.
 
 `recent` orders by last change, newest first, with a `key` tie-break — memories
 written in a single call share a timestamp to the nanosecond, and an unstable
@@ -501,6 +507,105 @@ hash of the body, so the log records *what* was destroyed, not merely that
 something was.
 
 **Errors** — `wrong_state`, `invalid_input` (no such key), `cas_conflict`.
+
+---
+
+## Verification
+
+Change evidence says what *moved*. This says what someone *concluded*, and it is
+the only thing in stigmergy that records that a memory was ever actually checked.
+
+Everything else about a memory is a mutation time — `updated_at` moves exactly as
+far for a typo fix as for a rewrite. Nothing has ever recorded that a person or an
+agent read a proposition and found it still true. That is what these two tools are
+for, and it is why the whole model treats "last changed" and "last checked" as
+different questions throughout.
+
+**Never inferred.** Not from an edit, not from byte equality, not from a read. An
+identical rewrite is not proof anyone verified anything, and a changed body may be
+a correction, a reformat, or an elaboration — indistinguishable from outside. The
+only thing that records a verification is an agent explicitly saying so.
+
+### `memory_verify`
+
+> Record that you checked a memory, and what you concluded.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `key` | string | yes | project scope |
+| `outcome` | string | yes | `reaffirmed`, `revised`, or `refuted` |
+| `expected_memory_version` | int | yes | the version you actually read and judged |
+| `reason` | string | no | what you checked and how |
+| | | | State: **Registered** |
+
+| Outcome | Means |
+|---|---|
+| `reaffirmed` | Checked, still true, unchanged. The only outcome that asserts the proposition currently holds. |
+| `revised` | Was wrong or incomplete and has been corrected — records that an edit was a *correction* rather than a tidy-up, which nothing could infer from the edit itself. |
+| `refuted` | No longer true and not fixable by editing. |
+
+**Refuting deletes nothing.** It records what you found; what to do about the memory
+is a separate, deliberate decision. Memories are the state of the system, and
+nothing but an explicit delete removes them.
+
+`expected_memory_version` is required and checked. An outcome recorded against a
+version its author never read is a judgement of different text, and a later rewrite
+would silently inherit the approval.
+
+When the memory has an evidence policy, the **evidence is snapshotted into the
+record** exactly as it stood. That is the point of storing it rather than
+recomputing on read: an outcome is only interpretable against what the observer
+could actually see, and re-running the measurement next year answers a different
+question because HEAD has moved and every count with it. No policy means a NULL
+policy version, which stays distinguishable from *having* had evidence that showed
+nothing — verifying by reading the code or asking the user is a perfectly good way
+to check something.
+
+A reaffirm is also the one moment when re-capturing an evidence baseline is
+legitimate, and the response says so. It stays a separate `memory_evidence_set`
+call rather than happening automatically: "I checked the part I came for" is not "I
+checked everything the policy observes", and only you know which you just did.
+
+**Errors** — `wrong_state`; `invalid_input` (an outcome outside the vocabulary);
+`cas_conflict` (the memory changed while you were assessing it).
+
+### `memory_history`
+
+| Parameter | Type | Required |
+|---|---|---|
+| `key` | string | yes |
+| | | State: **Opened** |
+
+**Returns** `history[]`, oldest first — because the meaning is in the sequence.
+Each entry carries `outcome`, `memory_version`, `policy_version`, the `evidence`
+snapshot, `reason`, `actor`, `agent_kind` and `at`.
+
+Append-only. There is no edit and no delete: a verification is a statement somebody
+made at a moment, and a history that can be rewritten afterwards is not evidence of
+anything. Rows leave only with the memory they belong to. GC does **not** prune this
+table, unlike audit records and resolved mail — it is a handful of rows per memory
+per year, and it is the substrate everything below depends on.
+
+### Why there is still no ranking
+
+The obvious next thing — order the index by what most needs re-checking — does not
+exist, and its absence is deliberate.
+
+A ranking needs a threshold, and no threshold is derivable from what is stored. Raw
+commit counts are not comparable across repositories with different merge styles. A
+priority ordering additionally needs the two terms this system does not have: what
+it would cost to be wrong, and what it would cost to check. A repeatedly-affirmed
+fact is often the highest-consequence one, so "least recently verified" is not even
+a good proxy.
+
+What *could* calibrate one is this history — outcomes paired with the evidence that
+was visible when they were made. That is why the snapshot exists. But the sampling
+here is **selected, never random**: agents check what they are already suspicious
+of, so the refuted rate in this table is not the refuted rate in the world, and
+anyone fitting anything to it has to model that bias explicitly.
+
+Until there is enough history to answer the question honestly, the tools report
+facts and let the agent judge.
 
 ---
 
