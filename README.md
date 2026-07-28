@@ -78,26 +78,14 @@ only for trusted projects, and until then none of this takes effect there.
 |---|---|
 | [docs/usage.md](docs/usage.md) | install, enable, the daily loop, full CLI reference, troubleshooting |
 | [docs/architecture.md](docs/architecture.md) | the design and the reasons for it: schema, invariants, what a change must not break |
-| [docs/mcp-tools.md](docs/mcp-tools.md) | reference for all 21 MCP tools: parameters, returns, error codes |
+| [docs/mcp-tools.md](docs/mcp-tools.md) | reference for all 26 MCP tools: parameters, returns, error codes |
 | [docs/hosts.md](docs/hosts.md) | what `init` writes, the hook contracts, and what each host can and cannot enforce |
 | [docs/operations.md](docs/operations.md) | TTLs, housekeeping, backup, removal, failure modes |
+| [docs/memory-model.md](docs/memory-model.md) | what a memory is for, and the change-evidence design: what it can and cannot tell you |
+| [docs/deliberation.md](docs/deliberation.md) | `stigmergy deliberate` — the adversarial specification pipeline, a separate subsystem |
+| [docs/VERIFY.md](docs/VERIFY.md) | every assumption made about a host, how it was checked, and what is still open |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | building, testing, the invariants a change must not break, and how to ship a schema change safely |
 
-## Status
-
-v1. All milestones implemented and the test suite is green.
-
-Every host's hook payloads are documented poorly, not at all, or wrongly, so some of
-what stigmergy assumes about them is still assumed rather than observed. The one that
-matters: whether a subagent is distinguishable from a root. It is on Claude Code and
-on opencode (which records a parent on the session); it is not on Codex or
-Antigravity, where the subagent rule is advisory and says so. Every such assumption is
-written down where it is relied on, and each fails in the safe direction —
-`stigmergy hook dump` is the instrument for settling them.
-
-opencode is the sharpest example of why that matters. Its published documentation omits
-the field the claim guard depends on, and describes a hook that does not exist; what
-stigmergy does there was read out of the binary and then checked against a live
-session.
 
 ## Licence
 

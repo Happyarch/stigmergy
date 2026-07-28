@@ -18,6 +18,7 @@ changing a design decision, not a setting.
 | `RootTTL` | 15 min | `store/roots.go` | a root unheard-from this long stops holding claims, and can no longer be sent mail. **This is the crash-safety net** — see below |
 | `StaleRootSilence` | 5 min | | a root still inside the TTL but quiet long enough to say so when it is named. Changes no decision; it is what turns "live" into "quiet (last seen 9m ago; lapses in 6m)" |
 | `StaleRootAge` | 7 d | | when a silent root gets `ended_at` stamped by `ReapStaleRoots` |
+| `CallerTicketTTL` | 60 s | `store/callers.go` | a caller ticket describes ONE call that is about to happen. Anything older describes a call that never came, and honouring it would attribute somebody else's call to the agent that was refused |
 | heartbeat budget | 100 ms | `hooks/mail.go` | a heartbeat must never cost the agent its edit |
 | `AuditRetention` | 90 d | `store/gc.go` | long enough to investigate anything anyone still remembers |
 | `MailRetention` | 30 d | | resolved threads only; a settled conversation stops being worth re-reading |
@@ -74,7 +75,14 @@ stigmergy doctor --gc
 Two things happen:
 
 **`ReapStaleRoots`** stamps `ended_at` on roots that have been silent for 7 days.
-Cosmetic — they already stopped holding claims fifteen minutes in.
+Cosmetic — they already stopped holding claims fifteen minutes in. Expect more rows
+than there were sessions: on Claude Code each agent inside a session gets a root of
+its own ([architecture.md §8](architecture.md#8-agents-inside-a-session-explorers-and-the-root-gate)),
+and they are ended as they finish rather than left to this sweep.
+
+**Caller tickets** need no housekeeping at all. Each is consumed by the call it
+describes, and the same transaction drops anything past its 60-second TTL, so the
+table is the size of the calls in flight — normally zero.
 
 **`GC`** prunes:
 
@@ -98,20 +106,31 @@ works fine with an unpruned audit log; it just gets larger.
 
 ## Backup
 
-The project database is a single SQLite file:
+Project databases are SQLite files. Their location depends on the project structure:
+
+**Single-repository projects** (most common):
 
 ```
 <git-common-dir>/stigmergy.sqlite3
 ```
 
-Copy it (plus `-wal` and `-shm`, or checkpoint the WAL first with
-`sqlite3 stigmergy.sqlite3 'PRAGMA wal_checkpoint(TRUNCATE);'`). The global database
-is at `$XDG_DATA_HOME/stigmergy/global.sqlite3`.
+**Multi-repository projects** (a project spanning multiple git repositories):
 
-**The project database lives inside `.git/`, which means it is not committed, not
-cloned, and not pushed.** Project memories are local to your machine. This surprises
-people, so it is worth saying twice: `git push` does not share your memories with
-anyone, and `git clone` on another machine gets you an empty stigmergy.
+```
+$XDG_DATA_HOME/stigmergy/projects/<projectID>/stigmergy.sqlite3
+```
+
+Each member repository has a pointer file at `<git-common-dir>/stigmergy-project.json`
+that identifies it as part of the project and records its `projectID`.
+
+Copy the database file(s) plus `-wal` and `-shm` files, or checkpoint the WAL first with
+`sqlite3 stigmergy.sqlite3 'PRAGMA wal_checkpoint(TRUNCATE);'`. The global database
+is always at `$XDG_DATA_HOME/stigmergy/global.sqlite3`.
+
+**Project databases do not travel with git.** They are not committed, not cloned, and
+not pushed. Project memories are local to your machine. This surprises people, so it is
+worth saying twice: `git push` does not share your memories with anyone, and `git clone`
+on another machine gets you an empty stigmergy.
 
 If a fact is true everywhere, `memory_promote` it into the global scope — but that
 is still per-machine. Syncing memories across machines is not something stigmergy
@@ -119,7 +138,7 @@ does today.
 
 ### Worktrees and clones
 
-The database sits in the git **common** dir, so:
+For **single-repo projects**, the database sits in the git **common** dir:
 
 - linked worktrees (`git worktree add`) **share one database** — two agents in two
   worktrees of the same repository see and block each other, which is what you want,
@@ -127,7 +146,9 @@ The database sits in the git **common** dir, so:
 - separate clones are **fully isolated**, which is also what you want, because they
   are not
 
----
+For **multi-repo projects**, all member repositories share the same database in
+`$XDG_DATA_HOME/stigmergy/projects/<projectID>/`, regardless of whether they are
+worktrees or separate clones.
 
 ## Removing and purging
 

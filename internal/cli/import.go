@@ -13,6 +13,7 @@ import (
 
 	"github.com/happyarch/stigmergy/internal/gitx"
 	"github.com/happyarch/stigmergy/internal/importer"
+	"github.com/happyarch/stigmergy/internal/project"
 	"github.com/happyarch/stigmergy/internal/store"
 )
 
@@ -177,7 +178,12 @@ func maybeImportLegacyMemories(out io.Writer, in io.Reader, repo *gitx.Repo, noI
 		return nil
 	}
 
-	db, err := store.OpenProject(repo.CommonDir)
+	// Resolve the project (single-repo or multi-repo) and open its database.
+	proj, err := project.ResolveWithFallback(repo.WorktreeRoot)
+	if err != nil {
+		return err
+	}
+	db, err := store.OpenProjectAt(proj.DBPath)
 	if err != nil {
 		return err
 	}
