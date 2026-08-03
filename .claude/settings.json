@@ -18,7 +18,7 @@
             "type": "command"
           }
         ],
-        "matcher": "mcp__stigmergy__(root_register|root_heartbeat|root_deregister|memory_write|memory_promote|memory_delete|claim_acquire|claim_renew|claim_release|mailbox_.*)"
+        "matcher": "mcp__stigmergy__(root_.*|memory_write|memory_promote|memory_delete|memory_evidence_set|memory_evidence_clear|memory_verify|claim_.*|mailbox_.*)"
       }
     ],
     "SessionEnd": [
@@ -46,6 +46,16 @@
         "hooks": [
           {
             "command": "stigmergy hook mail-gate",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "stigmergy hook subagent-stop",
             "type": "command"
           }
         ]

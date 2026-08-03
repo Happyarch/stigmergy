@@ -15,11 +15,22 @@ const CommandPrefix = "stigmergy hook"
 // repository, where an absolute path from one machine is wrong on every other.
 const Binary = "stigmergy"
 
-// RootGateTools is the matcher for tools only a root may call. Subagents that
-// try are denied: memories, claims and mail are the root's to write, and a
-// swarm of subagents writing them concurrently produces exactly the incoherence
-// stigmergy exists to prevent.
-const RootGateTools = `mcp__stigmergy__(root_register|root_heartbeat|root_deregister|memory_write|memory_promote|memory_delete|claim_acquire|claim_renew|claim_release|mailbox_.*)`
+// RootGateTools is the matcher for every call whose answer depends on WHICH
+// agent in the session is asking.
+//
+// It is no longer only a deny-list, and the name has outlived its accuracy: the
+// hook it fires stamps the caller's identity for the MCP server (which shares
+// one connection between every agent in a session and cannot otherwise tell them
+// apart) and refuses only the tools that belong to the session root. The matcher
+// must therefore keep covering the claim tools, which are now allowed — an
+// unstamped claim would be attributed to the session instead of to the peer that
+// took it, which is the bug this whole mechanism exists to close, arriving
+// silently instead of as a denial.
+//
+// The name stays because it is already written into every installed
+// settings.json on every machine, and a rename would leave those pointing at a
+// subcommand that no longer exists.
+const RootGateTools = `mcp__stigmergy__(root_.*|memory_write|memory_promote|memory_delete|memory_evidence_set|memory_evidence_clear|memory_verify|claim_.*|mailbox_.*)`
 
 // EditTools is the matcher for the tools that write files.
 const EditTools = `Edit|Write|NotebookEdit`
@@ -54,6 +65,11 @@ var claudeHooks = []struct {
 	{"PreToolUse", EditTools, Binary + " hook claim-guard"},
 	{"PreToolUse", RootGateTools, Binary + " hook root-gate"},
 	{"Stop", "", Binary + " hook mail-gate"},
+	// An agent's claims must not outlive the agent. Without this entry a peer's
+	// claim would go on blocking the rest of the repository for the full root
+	// TTL, held by an agent that finished minutes ago and cannot be negotiated
+	// with — which would make granting peers claims at all a bad trade.
+	{"SubagentStop", "", Binary + " hook subagent-stop"},
 	{"SessionEnd", "", Binary + " hook session-end"},
 }
 

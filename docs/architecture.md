@@ -46,12 +46,15 @@ threat model deliberately, or drop the idea.
 
 ## 2. The model
 
-**Root.** A top-level agent session — one Claude Code or Codex conversation. A
-root is the only thing that may register, claim, write memory, or send mail.
-Subagents and explorers are *not* roots: they read, and they report findings back
-to their root, which decides what to record. This keeps writes serialized through
-one accountable actor per session rather than through an unbounded fan-out of
-subagents that don't know about each other.
+**Root.** One agent, addressable and answerable — usually a top-level session, one
+Claude Code or Codex conversation. On a host that identifies the agents running
+inside a session, each of them is a root too, with its own claims (§8); on every
+other host a root is the session and nothing else.
+
+Memory and mail stay with the session root everywhere, so what is written down stays
+serialized through one accountable actor rather than an unbounded fan-out of
+short-lived agents that don't know about each other. Explorers are not roots at all:
+they read, and report back to the root that sent them.
 
 **Memory.** A durable note with a key, a type, a one-line description, and a body.
 Two scopes:
@@ -226,6 +229,15 @@ CREATE INDEX idx_roots_session ON roots(session_label) WHERE ended_at IS NULL;
 CREATE INDEX idx_roots_active  ON roots(last_seen_at)  WHERE ended_at IS NULL;
 ```
 
+`session_label` is the identity of an **agent**, which is not always the identity of
+a host session. Where a host runs several agents in one session and says which is
+which — Claude Code, today — a peer's label is `"<session>#<type>:<id>"` and it gets
+a root of its own, while the main thread keeps the bare session id. See §8. That is
+why identity was added as a label convention and not as a column: `RegisterRoot` and
+`RootBySession` already key on this string, so every path that resolves an owner —
+the claim guard included — got peers for free, and a database written before it
+still reads correctly.
+
 Both indexes are **partial** (`WHERE ended_at IS NULL`). Every query that matters
 asks about live roots; ended ones are history. The partial index keeps the hot
 lookup — "which root is this session?", run on the hook path, on every single edit
@@ -257,7 +269,22 @@ CREATE TABLE repos (            -- 0007; the project's member repositories
   worktree   TEXT NOT NULL,         -- on THIS machine
   added_at   TEXT NOT NULL
 );
+
+CREATE TABLE caller_tickets (   -- 0010; which agent is about to make one MCP call
+  tool_use_id   TEXT PRIMARY KEY,   -- the host's own id for the call; the join key
+  session_label TEXT NOT NULL,      -- the caller's agent label, already composed
+  agent_kind    TEXT NOT NULL,
+  worktree      TEXT NOT NULL,
+  created_at    TEXT NOT NULL
+);
+
+CREATE INDEX idx_caller_tickets_age ON caller_tickets(created_at);
 ```
+
+`caller_tickets` is the one table here that holds no history: a row lives for the
+milliseconds between the hook that writes it and the tool call that consumes it (60s
+TTL, swept by the same transaction that reads one). It exists because the MCP server
+cannot see which agent in a session is calling it, and the hook can — see §8.
 
 `claims.repo_id` is the only place the repository dimension appears, and the
 absences are deliberate. `memories` does not get one because project-wide sharing
@@ -499,6 +526,16 @@ Fixed width, always UTC, always the same number of fractional digits. `store.Now
 and `store.Stamp()` are the only ways to produce one, and `store.SetClock()` lets
 tests pin it.
 
+**Every timestamp, not only the interesting ones.** A single short value skews its
+own comparisons — `…:00Z` sorts *above* `…:00.000000000Z`, because `Z` beats `.` —
+so a row written earlier reads as newer. For most columns that is cosmetic; for two
+it decides behaviour. `claims.expires_at` reading as newer than it is means a claim
+that never expires and blocks everyone forever, and `roots.last_seen_at` reading
+newer means a dead root that goes on holding its claims and accepting mail. Any
+value arriving from outside — an import, a repaired row, an older binary — goes
+through `CanonicalStamp` on the way in. Do not add a column that stores a time
+without it.
+
 ### 5.5 CAS is decided in exactly one place
 
 `expected_version` semantics:
@@ -601,6 +638,64 @@ The hook path never writes to it. Hooks run per-edit under a 250ms lock budget
 and open the project read-only; a registry write there would put a second
 database in the critical section of the thing §9 exists to keep fast.
 
+### 5.10 A claim that has stopped binding never comes back
+
+A claim stops binding in four ways: its root goes silent past the TTL, its
+`expires_at` passes, it is released, or its root ends.
+
+> **Nothing may return a dead claim to life without re-running the check that grants
+> one in the first place.**
+
+The trap is that `released_at IS NULL` answers "does this row still exist", which is
+not the same question as "does this still bind" — and code that asks only the first
+will resurrect something. Renewing an expired claim is the sharp case: by then another
+agent may legitimately hold the path, and extending the old one leaves two roots each
+told the same file is theirs.
+
+Two rules keep it closed. The liveness sweep runs at the **top** of an acquire or
+renew transaction, never after the write, so the sweep, the overlap check and the
+write are one atomic step. And an operation on a claim that has stopped binding is not
+simply refused — it re-runs the overlap check an acquire would: path still free, let
+it through; somebody took it, report the conflict and name them. Refusing outright
+fails safe operations for no reason the agent can act on.
+
+If you add a fifth way for a claim to end — a project-level pause, a manual override,
+removing a repository from a project — assume it has this bug until a test says
+otherwise, and write the "somebody else took it meanwhile" case first.
+
+### 5.11 Text an agent writes is validated before it is stored
+
+Every agent-authored string — memory descriptions and bodies, mail subjects and
+bodies, claim reasons, branches, worktrees, session labels, models, verification
+reasons, evidence patterns — goes through `ValidateLine`/`ValidateBlock` and
+`NormalizeText`. Not for tidiness. This text is *displayed to other agents and to
+people*, and two of the things it can contain are attacks on the reader rather than
+mistakes: an ANSI escape stored in a memory executes in the next reader's terminal,
+and a bidi override (Trojan Source) makes text render in an order it is not written
+in — in a system whose entire content is instructions other agents act on.
+
+The three-way split is the design:
+
+- **Normalised** where there is one obvious meaning: BOM, CRLF/CR → LF, trim.
+- **Rejected** where the input is ambiguous or destructive: C0 controls and DEL
+  except tab and newline, invalid UTF-8, bidi overrides, a newline in a one-line
+  field, over-length.
+- **Defused** for the one case where refusing would be wrong: a lone carriage return
+  is *converted*, not refused. `"real\rfake"` displays in a terminal as only
+  `"fake"` — the first half is overwritten and never seen — but refusing every CR
+  would turn "your editor saved this file" into an error.
+
+Two rules are easy to get wrong in the obvious direction. **Literal `\n` is not
+banned**, because both populations are real: bodies mangled by an agent JSON-encoding
+text that was already going to be encoded, and perfectly good bodies containing printf
+formats or regexes. What separates them is the *absence of real line breaks*, not the
+presence of escapes. And **normalisation runs to a fixed point**, not one pass —
+stripping one leading BOM exposes the next, and no ordering of the steps avoids it.
+
+`doctor` reports rows that would be refused today and never repairs them. Un-escaping
+means guessing what the author meant, and a legacy row stays readable so it stays
+fixable by whoever knows.
+
 ---
 
 ## 6. Package map
@@ -614,8 +709,11 @@ database in the critical section of the thing §9 exists to keep fast.
 | `paths` | absolute/relative → repo-relative POSIX; symlinks; worktree-escape | agents write files that *don't exist yet*, so it resolves the deepest existing ancestor and re-appends the missing tail |
 | `gitx` | worktree root + git common dir, pure Go, with a subprocess fallback | the hook path uses the pure-Go path only — shelling out to `git` on every edit would blow the latency budget |
 | `project` | which project governs a directory, and which of its repositories a path is in | resolution runs on the hook path, so it is filesystem-only by construction: one `gitx` walk and one small file read, no subprocess and no query |
-| `mcpserver` | the MCP server: session state machine, 21 tools, instructions | |
+| `mcpserver` | the MCP server: session state machine, 26 tools, instructions | |
 | `hooks` | the host hook protocols and the shared `Guard` fast path | Claude and Codex differ in *protocol*, not in *decision* — one guard, two renderings |
+| `hosts` | what each host can enforce, declared once along the axes that vary | the per-host copies of that text used to contradict each other; every rule an agent reads is now rendered from here |
+| `drift` | what has CHANGED in a memory's declared scope since a recorded commit | it measures change and never truth — keeping it out of `store` keeps that distinction structural (see memory-model.md) |
+| `deliberate` | the adversarial specification pipeline and its bwrap sandbox | a separate subsystem that merely *uses* stigmergy; nothing in the memory/claims path may depend on it |
 | `hostcfg` | writing/removing host config, idempotently, without clobbering | merging into someone else's config file is fiddly and deserves its own tests |
 | `importer` | legacy Claude markdown memory import | |
 | `explore` | the sandboxed `codex exec` explorer | |
@@ -659,17 +757,49 @@ else will stop you.
 
 ---
 
-## 8. Subagents, explorers, and the root-gate
+## 8. Agents inside a session, explorers, and the root-gate
 
-Only roots may mutate. Enforcing that differs by host:
+A host session is not an agent. Several agents can run inside one, sharing its id
+and — because there is one `stigmergy mcp` process per host process — its single MCP
+connection. Every request from them arrives looking identical, which is a problem
+about *identity* long before it is a problem about permission.
 
-- **Claude**: a `root-gate` PreToolUse hook matches the mutating
-  `mcp__stigmergy__*` tools and denies them when the payload shows a subagent
-  indicator. **If no indicator is present, the caller is treated as a root** — on
-  purpose. Guessing "subagent" on an ambiguous payload would lock a root out of its
-  own tools, which is a far worse failure than a subagent sneaking a write. Which
-  field actually identifies a subagent — or whether any field does — is **unverified**;
-  `stigmergy hook dump` exists to settle it. If none does, this gate is advisory.
+- **Claude**: identified, and each agent gets a root. The host describes each call
+  twice: to the `PreToolUse` hook, which is told `agent_id` and `agent_type`, and to
+  the MCP server, which is told `_meta["claudecode/toolUseId"]`. Both carry the same
+  host-minted tool-use id, so the hook writes a **caller ticket** under it
+  (`caller_tickets`, migration 0010) and `Session.actingRoot` consumes it to act as
+  the agent that actually called. The claim guard resolves the same label, so a
+  peer's claim blocks its neighbours exactly as a stranger's would.
+
+  This is enforcement rather than an honour system, and the indirection is what
+  makes it so: a model never handles a tool-use id, cannot mint one, and cannot
+  write a ticket. An "which agent are you" argument on the tool would have been one
+  line and worth nothing.
+
+  Every failure — no `_meta`, no ticket, no hooks installed, another host — resolves
+  to the session root, which is exactly how this behaved before the mechanism
+  existed. That is the compatibility argument, and it is why the identity could be
+  added without a flag.
+
+  What the gate still refuses to a peer is chosen by **lifetime, not rank**: memory
+  writes and the whole mailbox stay with the session root, because a peer ends in
+  minutes and cannot read a reply that arrives afterwards, nor answer for a memory
+  someone reads next year. Claims are deliberately not on that list — a claim is a
+  thing you borrow and give back, which is precisely what a short-lived agent can do
+  and precisely what it needs.
+
+  `SubagentStop` ends an agent's root and releases its claims immediately;
+  `SessionEnd` sweeps the session and every agent under it. Without those a peer's
+  claim would outlive it by the full root TTL, held by an agent that cannot be
+  negotiated with — which would make granting peers claims a worse trade than
+  refusing them.
+
+  The payload fields this rests on are **undocumented**, and were read off a live
+  2.1.220 session with `stigmergy hook dump` and a `tee` on the MCP stdio rather
+  than taken from a doc page (which, checked the same day, denies they exist).
+  Tests pin the observed shapes so a host that changes them fails loudly instead of
+  silently collapsing every agent back into one identity.
 - **Codex**: native subagents inherit the parent's sandbox and permissions, so they
   are *not* an isolation boundary. That is why `stigmergy explore` exists: it runs
   `codex exec --sandbox read-only -c approval_policy="never" --ephemeral -c

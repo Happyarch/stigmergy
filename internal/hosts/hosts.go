@@ -305,15 +305,24 @@ func (h Host) MailRule() string {
 }
 
 // SubagentRule is what this host's agents must know about who may write.
+//
+// On a host that identifies its agents, this no longer reads "only the root may
+// claim". It used to, and it was wrong in the way that mattered: the agents
+// working alongside each other in one session are exactly the ones who need
+// claims, and refusing them turned the session into a single identity that could
+// overwrite its own work. What stays with the root is what outlives a peer —
+// memory, and a mailbox that could only answer after the peer had gone.
 func (h Host) SubagentRule() string {
-	const lead = "Only the root session may claim, write memory, or send mail."
 	if h.Subagents == SubagentsGated {
-		return lead + " Subagents read and report back to you; let the root record what lasts."
+		return "Agents working inside your session hold claims of their own, and those claims block " +
+			"you as yours block them. Memory and mail stay with you, the session root: a peer ends " +
+			"before a reply could reach it, so let it report to you and record what lasts yourself."
 	}
 	note := h.SubagentNote
 	if note == "" {
 		note = "stigmergy cannot tell a subagent from a root here"
 	}
-	return lead + " For read-only exploration use `stigmergy explore`, not a native subagent: " +
+	return "Only the root session may claim, write memory, or send mail. " +
+		"For read-only exploration use `stigmergy explore`, not a native subagent: " +
 		note + ". Nothing enforces this here — it holds only because you keep it."
 }

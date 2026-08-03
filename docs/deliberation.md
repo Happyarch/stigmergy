@@ -603,7 +603,7 @@ Every role, every turn, receives exactly three things:
 └─ CRITIQUE ────── the most recent critique only. Absent on round 1.
 ```
 
-Plus its role prompt ([§2](#2-the-three-roles)) and the questions, at REVISE.
+Plus its role prompt ([§2](#2-the-roles)) and the questions, at REVISE.
 
 **Only the most recent critique.** Not the history, not the previous rounds'
 specs, not the transcript of who said what. This is the rule the whole payload

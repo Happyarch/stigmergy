@@ -240,22 +240,59 @@ func TestEditedPaths(t *testing.T) {
 	}
 }
 
-func TestSubagentEvidence(t *testing.T) {
-	sub := &ClaudeInput{Raw: map[string]any{"tool_name": "mcp__stigmergy__memory_write", "subagent_type": "explorer"}}
-	if is, field := sub.SubagentEvidence(); !is || field != "subagent_type" {
-		t.Fatalf("SubagentEvidence() = %v, %q, want true, subagent_type", is, field)
+// The payloads here are verbatim shapes from a live Claude Code 2.1.220 session
+// (`stigmergy hook dump`), not invented ones. That is the whole reason this
+// identity can be relied on, so the test is written to fail loudly if a future
+// version stops sending them.
+func TestAgentIdentityComesFromThePayload(t *testing.T) {
+	peer := &ClaudeInput{
+		SessionID: "a2238126-6f3d-4f31-a3b9-288a01bb0415",
+		AgentID:   "a4d39a33457e0df63",
+		AgentType: "general-purpose",
+	}
+	if !peer.IsAgent() {
+		t.Fatal("a payload carrying agent_id must be read as an agent")
+	}
+	want := "a2238126-6f3d-4f31-a3b9-288a01bb0415#general-purpose:a4d39a33457e0df63"
+	if got := peer.Label(); got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
 	}
 
-	// No indicator means root. Guessing "subagent" here would lock the root out
-	// of its own tools, which breaks stigmergy outright.
-	root := &ClaudeInput{Raw: map[string]any{"tool_name": "mcp__stigmergy__memory_write", "session_id": "s"}}
-	if is, _ := root.SubagentEvidence(); is {
-		t.Fatal("a payload with no subagent indicator must be treated as a root")
+	// The main thread carries neither field, and MUST keep the session's own
+	// label: anything else strands every claim it already holds.
+	main := &ClaudeInput{SessionID: "a2238126-6f3d-4f31-a3b9-288a01bb0415"}
+	if main.IsAgent() {
+		t.Fatal("a payload with no agent_id is the main thread")
 	}
+	if got := main.Label(); got != main.SessionID {
+		t.Fatalf("Label() = %q, want the bare session id %q", got, main.SessionID)
+	}
+}
 
-	// An empty-valued indicator is not evidence either.
-	empty := &ClaudeInput{Raw: map[string]any{"subagent_type": ""}}
-	if is, _ := empty.SubagentEvidence(); is {
-		t.Fatal("an empty subagent_type must not count as evidence")
+func TestSessionOnlyToolsRefuseMemoryAndMailButNeverClaims(t *testing.T) {
+	// The bug this whole mechanism exists to fix: a peer refused a claim.
+	for _, tool := range []string{
+		"mcp__stigmergy__claim_acquire", "mcp__stigmergy__claim_renew",
+		"mcp__stigmergy__claim_release", "mcp__stigmergy__claim_check",
+		"mcp__stigmergy__root_heartbeat",
+	} {
+		if why := SessionOnlyTool(tool); why != "" {
+			t.Errorf("SessionOnlyTool(%q) = %q, want it allowed", tool, why)
+		}
+	}
+	for _, tool := range []string{
+		"mcp__stigmergy__memory_write", "mcp__stigmergy__memory_delete",
+		"mcp__stigmergy__mailbox_send", "mcp__stigmergy__root_register",
+	} {
+		why := SessionOnlyTool(tool)
+		if why == "" {
+			t.Errorf("SessionOnlyTool(%q) = allowed, want refused", tool)
+			continue
+		}
+		// The refusal has to say what the agent MAY do, or it teaches the same
+		// false lesson the old one did: that it is shut out of coordination.
+		if !strings.Contains(why, "claim_acquire") {
+			t.Errorf("SessionOnlyTool(%q) does not say claims are still available: %q", tool, why)
+		}
 	}
 }

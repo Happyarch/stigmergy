@@ -11,6 +11,9 @@ package hooks
 import (
 	"encoding/json"
 	"io"
+	"strings"
+
+	"github.com/happyarch/stigmergy/internal/store"
 )
 
 // ClaudeInput is the payload Claude Code writes to a hook's stdin.
@@ -25,6 +28,14 @@ type ClaudeInput struct {
 	HookEventName  string         `json:"hook_event_name"`
 	ToolName       string         `json:"tool_name"`
 	ToolInput      map[string]any `json:"tool_input"`
+	// AgentID and AgentType name the agent within the session, and are present
+	// only when that is not the main thread. See Label.
+	AgentID   string `json:"agent_id"`
+	AgentType string `json:"agent_type"`
+	// ToolUseID is the host's id for the call this payload describes. It is the
+	// join between a hook and the MCP request it precedes: the same value arrives
+	// at the server as _meta["claudecode/toolUseId"]. See store.CallerTicket.
+	ToolUseID string `json:"tool_use_id"`
 	// StopHookActive is set when the agent is only still running because a Stop
 	// hook blocked it. It is the loop guard: a hook that blocks unconditionally
 	// on every Stop would never let the agent finish at all.
@@ -138,45 +149,78 @@ func NewPromptContext(text string) PromptContext {
 	return c
 }
 
-// subagentKeys are the payload fields that would identify a call as coming from
-// a subagent rather than the root session.
+// IsAgent reports whether this call came from an agent inside the session
+// rather than from the session's main thread.
 //
-// Which of these Claude Code actually sends is an open question:
-// the hook payload schema is not documented at this level of detail, and it
-// changes between versions. So instead of betting on one field name, we look
-// for any of them, and — critically — treat "none present" as "this is a root",
-// not as "this is a subagent". Guessing wrong in that direction would block the
-// root itself from ever writing memory, which breaks the tool completely; the
-// cost of guessing wrong the other way is that a subagent's write slips through
-// to be caught by the agent-file boundary instead. Run `stigmergy hook dump`
-// against a real subagent to settle this and prune the list.
-var subagentKeys = []string{
-	"subagent_type", "subagentType",
-	"agent_type", "agentType",
-	"is_subagent", "isSubagent",
-	"parent_tool_use_id", "parentToolUseId",
+// This used to be a guess. The payload schema is not documented at this level of
+// detail, so the code looked for any of eight plausible field names and treated
+// "none present" as "this is the root" — safe in the direction that mattered,
+// and wrong about everything else. It is now settled by observation: a live
+// Claude Code 2.1.220 session, `stigmergy hook dump` on PreToolUse, one main
+// thread and one peer.
+//
+//	main thread   no agent_id, no agent_type
+//	peer agent    agent_id "a4d39a33457e0df63", agent_type "general-purpose"
+//	              session_id IDENTICAL to the main thread's
+//
+// SubagentStop carries the same two fields, which is what lets an agent's root
+// be ended the moment it finishes rather than waiting out the TTL.
+//
+// The absence rule is unchanged and still load-bearing: no agent_id means the
+// main thread, and the main thread must keep the session's own label or it loses
+// every claim it holds.
+func (in *ClaudeInput) IsAgent() bool { return in.AgentID != "" }
+
+// Label is the identity this call should act under: the session's own label for
+// the main thread, and an agent label for anyone else.
+func (in *ClaudeInput) Label() string {
+	return store.AgentLabel(in.SessionID, in.AgentType, in.AgentID)
 }
 
-// SubagentEvidence reports whether the payload identifies this call as coming
-// from a subagent, and which field said so.
-func (in *ClaudeInput) SubagentEvidence() (bool, string) {
-	for _, k := range subagentKeys {
-		v, ok := in.Raw[k]
-		if !ok || v == nil {
-			continue
-		}
-		switch t := v.(type) {
-		case string:
-			if t != "" {
-				return true, k
-			}
-		case bool:
-			if t {
-				return true, k
-			}
-		default:
-			return true, k
-		}
+// sessionOnly are the tools that stay with the session root even now that the
+// agents inside it have identities of their own.
+//
+// The line is drawn by lifetime, not by rank. A peer exists for a minute: it can
+// be handed a file for that minute and give it back, which is what a claim is,
+// but it cannot hold a conversation that outlives it, and a memory it writes
+// will be read by agents who have no way to ask it what it meant. Mail addressed
+// to an agent that ended before the reply arrived is worse than no mailbox at
+// all — the sender waits on someone who is already gone.
+//
+// So: claims yes, memory and mail no. The claim tools are deliberately absent
+// from this list; that is the whole point of the change that introduced it.
+var sessionOnly = map[string]string{
+	"memory_write":          "memories outlive you",
+	"memory_promote":        "memories outlive you",
+	"memory_delete":         "memories outlive you",
+	"memory_evidence_set":   "memories outlive you",
+	"memory_evidence_clear": "memories outlive you",
+	"memory_verify":         "memories outlive you",
+	"mailbox_send":          "a reply would arrive after you have finished",
+	"mailbox_inbox":         "a reply would arrive after you have finished",
+	"mailbox_threads":       "a reply would arrive after you have finished",
+	"mailbox_thread":        "a reply would arrive after you have finished",
+	"mailbox_mark_read":     "a reply would arrive after you have finished",
+	"mailbox_resolve":       "a reply would arrive after you have finished",
+	"root_register":         "your root is created for you, from the identity your host gave you",
+	"root_deregister":       "your root ends when you do",
+}
+
+// SessionOnlyTool returns the refusal for a tool an agent inside a session may
+// not call, or "" if it may.
+//
+// The refusal says which agent is being refused and what it may do instead,
+// because the version of this that said only "you are a subagent" taught agents
+// a false model of the system: they concluded they were shut out of coordination
+// entirely and stopped trying to claim anything.
+func SessionOnlyTool(toolName string) string {
+	name := strings.TrimPrefix(toolName, "mcp__stigmergy__")
+	why, blocked := sessionOnly[name]
+	if !blocked {
+		return ""
 	}
-	return false, ""
+	return "stigmergy: " + toolName + " belongs to the session root, not to you — " + why + ". " +
+		"You do have an identity of your own and you may claim files with it: claim_acquire, claim_renew and " +
+		"claim_release all work, and the claims you take are yours and block everyone else. " +
+		"Report anything worth remembering to your root and let it record what lasts."
 }

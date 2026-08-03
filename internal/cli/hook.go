@@ -23,7 +23,8 @@ func newHookCmd() *cobra.Command {
 		Long: "Hook handlers read a host's JSON payload on stdin and write a decision on stdout.\n" +
 			"They are wired up by `stigmergy init` and are not meant to be run directly.",
 	}
-	cmd.AddCommand(newClaimGuardCmd(), newRootGateCmd(), newSessionStartCmd(), newSessionEndCmd(),
+	cmd.AddCommand(newClaimGuardCmd(), newRootGateCmd(), newSubagentStopCmd(),
+		newSessionStartCmd(), newSessionEndCmd(),
 		newMailGateCmd(), newMailNotifyCmd(), newHookDumpCmd())
 	cmd.AddCommand(newCodexHookCmds()...)
 	cmd.AddCommand(newAntigravityHookCmds()...)
@@ -139,28 +140,45 @@ func newClaimGuardCmd() *cobra.Command {
 			// on every one of them. That is what lets the root TTL be short enough
 			// for a dead agent's claims to lapse in minutes rather than an hour:
 			// a working agent proves it is alive by working.
-			hooks.Heartbeat("claude-code", in.SessionID, in.CWD)
+			// Judged as whoever is actually editing. A peer inside the session has
+			// its own root and its own claims, so guarding it under the session's
+			// label would tell it that its neighbour's claims are its own — the
+			// exact fail-open this hook exists to prevent — and would keep the
+			// session's root alive on the strength of a peer's work.
+			label := in.Label()
+			hooks.Heartbeat("claude-code", label, in.CWD)
 
-			d := hooks.Guard("claude-code", in.SessionID, in.CWD, in.EditedPaths())
+			d := hooks.Guard("claude-code", label, in.CWD, in.EditedPaths())
 			if d.Allow {
 				return nil // Say nothing, cost nothing.
 			}
-			hooks.AuditDenial("claude-code", in.SessionID, in.CWD, d)
+			hooks.AuditDenial("claude-code", label, in.CWD, d)
 			return json.NewEncoder(os.Stdout).Encode(hooks.NewDeny(d.Reason))
 		},
 	}
 }
 
-// newRootGateCmd keeps subagents out of the tools that mutate shared state.
+// newRootGateCmd tells the MCP server which agent is calling it, and holds the
+// line on the two things that still belong to the session alone.
 //
-// Only a root may claim files, write memory, or send mail: a subagent's whole
-// job is to explore and report back, and a swarm of them writing memory
-// concurrently would produce exactly the incoherence stigmergy exists to
-// prevent.
+// It used to do only the second half, and did it to everyone: any call carrying
+// a hint of a subagent was denied, claims included. That was a guess standing in
+// for an identity — the server could not tell one agent in a session from
+// another, so the safe answer was to refuse them all. It made every peer agent
+// in a shared session unable to claim a file, and unable to register a root that
+// would have let it.
+//
+// The identity now exists (see store.AgentLabel and the caller-ticket table), so
+// the refusal can be narrowed to what it was always really about. A peer holds
+// its own claims, because two agents editing the same file is the failure this
+// project exists to prevent and claims are how that is prevented. Memory and
+// mail stay with the session root: a peer lives for a minute, cannot read a
+// reply that arrives after it is gone, and a swarm of them writing memory
+// concurrently is the incoherence stigmergy exists to prevent.
 func newRootGateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "root-gate",
-		Short:        "PreToolUse: keep subagents out of the mutating stigmergy tools",
+		Short:        "PreToolUse: identify which agent is calling, and keep peers out of memory and mail",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -169,14 +187,41 @@ func newRootGateCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "stigmergy: could not parse the hook payload: %v\n", err)
 				return nil
 			}
-			isSub, field := in.SubagentEvidence()
-			if !isSub {
+			if !in.IsAgent() {
+				return nil // The main thread is the session; nothing to say.
+			}
+			if reason := hooks.SessionOnlyTool(in.ToolName); reason != "" {
+				return json.NewEncoder(os.Stdout).Encode(hooks.NewDeny(reason))
+			}
+			// Stamped only once the call is going ahead. A ticket for a call that
+			// was just denied would sit there until it expired, and the next
+			// unstamped call in this session would be attributed to whoever was
+			// refused.
+			hooks.StampCaller("claude-code", in.Label(), in.CWD, in.ToolUseID)
+			return nil
+		},
+	}
+}
+
+// newSubagentStopCmd ends an agent's root the moment the agent does, so the
+// files it claimed are free again immediately rather than at the TTL.
+//
+// SubagentStop carries agent_id and agent_type, the same pair PreToolUse does,
+// which is what makes this possible at all: without them there would be no way
+// to tell which of the session's agents had just finished.
+func newSubagentStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "subagent-stop",
+		Short:        "SubagentStop: end this agent's root and release its claims",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			in, err := hooks.DecodeClaude(os.Stdin)
+			if err != nil || !in.IsAgent() {
 				return nil
 			}
-			return json.NewEncoder(os.Stdout).Encode(hooks.NewDeny(fmt.Sprintf(
-				"stigmergy: %s may only be called by a root session, and this call comes from a subagent (%s). "+
-					"Report your findings to your root and let it record them: memories, claims and mail are the root's to write.",
-				in.ToolName, field)))
+			hooks.EndAgent("claude-code", in.Label(), in.CWD)
+			return nil
 		},
 	}
 }

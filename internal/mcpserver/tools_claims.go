@@ -25,12 +25,16 @@ type ClaimOutput struct {
 	Claim *store.Claim `json:"claim"`
 }
 
-func (s *Session) claimAcquire(_ context.Context, _ *mcp.CallToolRequest, in ClaimAcquireInput) (*mcp.CallToolResult, ClaimOutput, error) {
+func (s *Session) claimAcquire(_ context.Context, req *mcp.CallToolRequest, in ClaimAcquireInput) (*mcp.CallToolResult, ClaimOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireRegistered(); err != nil {
 		return nil, ClaimOutput{}, toolError(err)
 	}
+	// Whoever is actually calling, which in a session running several agents is
+	// usually not the session itself. A claim taken under the session's identity
+	// would be a claim the taker's neighbours are free to edit straight through.
+	me := s.actingRoot(req)
 	repoID, scope, err := paths.ParseScope(in.ScopePath, s.memberIDs(), s.selfRepo())
 	if err != nil {
 		return nil, ClaimOutput{}, toolError(serr.E(serr.InvalidInput, "%s", err.Error()))
@@ -49,14 +53,14 @@ func (s *Session) claimAcquire(_ context.Context, _ *mcp.CallToolRequest, in Cla
 	}
 
 	claim, err := s.project.AcquireClaim(store.ClaimRequest{
-		ScopePath: scope, Recursive: in.Recursive, RootID: s.actor(), RepoID: repoID,
-		Worktree: s.root.Worktree, Branch: s.root.Branch,
+		ScopePath: scope, Recursive: in.Recursive, RootID: me.RootID, RepoID: repoID,
+		Worktree: me.Worktree, Branch: me.Branch,
 		Reason: in.Reason, TTLSeconds: in.TTLSeconds,
 	})
 	if err != nil {
 		return nil, ClaimOutput{}, toolError(err)
 	}
-	s.touch()
+	s.heartbeat(me)
 	return nil, ClaimOutput{Claim: claim}, nil
 }
 
@@ -73,7 +77,7 @@ type ClaimCheckOutput struct {
 	Claims  []store.Claim `json:"claims,omitempty"`
 }
 
-func (s *Session) claimCheck(_ context.Context, _ *mcp.CallToolRequest, in ClaimCheckInput) (*mcp.CallToolResult, ClaimCheckOutput, error) {
+func (s *Session) claimCheck(_ context.Context, req *mcp.CallToolRequest, in ClaimCheckInput) (*mcp.CallToolResult, ClaimCheckOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireOpened(); err != nil {
@@ -93,11 +97,15 @@ func (s *Session) claimCheck(_ context.Context, _ *mcp.CallToolRequest, in Claim
 		return nil, ClaimCheckOutput{}, toolError(serr.E(serr.InvalidInput, "%s", err.Error()))
 	}
 
-	found, err := s.project.ClaimsCovering(repoID, rel, s.actor())
+	// own is answered for the agent that asked, not for the session it lives in:
+	// "you already hold this" and "your neighbour holds this" are opposite
+	// instructions, and conflating them is how two agents end up editing one file.
+	me := s.actingRoot(req)
+	found, err := s.project.ClaimsCovering(repoID, rel, rootID(me))
 	if err != nil {
 		return nil, ClaimCheckOutput{}, toolError(err)
 	}
-	s.touch()
+	s.heartbeat(me)
 	return nil, ClaimCheckOutput{
 		Path: store.QualifyScope(repoID, rel), Claimed: len(found) > 0, Claims: found,
 	}, nil
@@ -135,17 +143,18 @@ type ClaimListOutput struct {
 	Claims []store.Claim `json:"claims"`
 }
 
-func (s *Session) claimListActive(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ClaimListOutput, error) {
+func (s *Session) claimListActive(_ context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ClaimListOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireOpened(); err != nil {
 		return nil, ClaimListOutput{}, toolError(err)
 	}
-	list, err := s.project.ActiveClaims(s.actor())
+	me := s.actingRoot(req)
+	list, err := s.project.ActiveClaims(rootID(me))
 	if err != nil {
 		return nil, ClaimListOutput{}, toolError(err)
 	}
-	s.touch()
+	s.heartbeat(me)
 	return nil, ClaimListOutput{Claims: list}, nil
 }
 
@@ -155,17 +164,18 @@ type ClaimRenewInput struct {
 	TTLSeconds int   `json:"ttl_seconds,omitempty" jsonschema:"new lifetime from now (60-86400; default 1800)"`
 }
 
-func (s *Session) claimRenew(_ context.Context, _ *mcp.CallToolRequest, in ClaimRenewInput) (*mcp.CallToolResult, ClaimOutput, error) {
+func (s *Session) claimRenew(_ context.Context, req *mcp.CallToolRequest, in ClaimRenewInput) (*mcp.CallToolResult, ClaimOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireRegistered(); err != nil {
 		return nil, ClaimOutput{}, toolError(err)
 	}
-	claim, err := s.project.RenewClaim(in.ClaimID, s.actor(), in.TTLSeconds)
+	me := s.actingRoot(req)
+	claim, err := s.project.RenewClaim(in.ClaimID, me.RootID, in.TTLSeconds)
 	if err != nil {
 		return nil, ClaimOutput{}, toolError(claimErr(err, in.ClaimID))
 	}
-	s.touch()
+	s.heartbeat(me)
 	return nil, ClaimOutput{Claim: claim}, nil
 }
 
@@ -180,16 +190,17 @@ type ClaimReleaseOutput struct {
 	Released bool  `json:"released"`
 }
 
-func (s *Session) claimRelease(_ context.Context, _ *mcp.CallToolRequest, in ClaimReleaseInput) (*mcp.CallToolResult, ClaimReleaseOutput, error) {
+func (s *Session) claimRelease(_ context.Context, req *mcp.CallToolRequest, in ClaimReleaseInput) (*mcp.CallToolResult, ClaimReleaseOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireRegistered(); err != nil {
 		return nil, ClaimReleaseOutput{}, toolError(err)
 	}
-	if err := s.project.ReleaseClaim(in.ClaimID, s.actor()); err != nil {
+	me := s.actingRoot(req)
+	if err := s.project.ReleaseClaim(in.ClaimID, me.RootID); err != nil {
 		return nil, ClaimReleaseOutput{}, toolError(claimErr(err, in.ClaimID))
 	}
-	s.touch()
+	s.heartbeat(me)
 	return nil, ClaimReleaseOutput{ClaimID: in.ClaimID, Released: true}, nil
 }
 

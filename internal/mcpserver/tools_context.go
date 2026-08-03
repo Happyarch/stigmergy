@@ -177,10 +177,10 @@ func (s *Session) rootRegister(_ context.Context, _ *mcp.CallToolRequest, in Roo
 	if err := s.requireOpened(); err != nil {
 		return nil, RootRegisterOutput{}, toolError(err)
 	}
-	// No defaulting for an empty worktree: it is a required field, and a root
-	// resumes on (agent_kind, worktree, session_label). Quietly substituting a
-	// worktree the caller never named would register it under a key it does not
-	// know, so the next session's resume would miss and strand its claims.
+	// No defaulting for an empty worktree: it is a required field. It is not part
+	// of the resume key — see RegisterRoot — but it is where this agent says it is
+	// working, which is what the roster and every conflict message report, and a
+	// directory the caller never named would be misleading in both.
 	// store.RegisterRoot rejects it and says what is wrong.
 	root, resumed, err := s.project.RegisterRoot(store.Registration{
 		RootID:       ids.NewRootID(),
@@ -232,12 +232,16 @@ type ActiveRoot struct {
 // the file, and could have handed it over in one exchange, was never asked.
 //
 // So: a roster, freshly read, that an agent can consult instead of remembering.
-func (s *Session) rootListActive(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RootListActiveOutput, error) {
+func (s *Session) rootListActive(_ context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RootListActiveOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireOpened(); err != nil {
 		return nil, RootListActiveOutput{}, toolError(err)
 	}
+	// Resolved before the roster is built, because "which of these is me" is the
+	// one line an agent acts on, and in a session running several agents the
+	// answer is no longer "the session".
+	me := s.actingRoot(req)
 	roots, err := s.project.ActiveRoots()
 	if err != nil {
 		return nil, RootListActiveOutput{}, toolError(err)
@@ -267,10 +271,10 @@ func (s *Session) rootListActive(_ context.Context, _ *mcp.CallToolRequest, _ st
 		out.Roots = append(out.Roots, ActiveRoot{
 			RootID: r.RootID, AgentKind: r.AgentKind, Model: r.Model,
 			Worktree: r.Worktree, Branch: r.Branch,
-			Liveness: r.Liveness(), Holds: holds, IsYou: r.RootID == s.actor(),
+			Liveness: r.Liveness(), Holds: holds, IsYou: r.RootID == rootID(me),
 		})
 	}
-	s.touch()
+	s.heartbeat(me)
 	return nil, out, nil
 }
 
@@ -280,16 +284,20 @@ type RootHeartbeatOutput struct {
 	LastSeenAt string `json:"last_seen_at"`
 }
 
-func (s *Session) rootHeartbeat(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RootHeartbeatOutput, error) {
+func (s *Session) rootHeartbeat(_ context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RootHeartbeatOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.requireRegistered(); err != nil {
 		return nil, RootHeartbeatOutput{}, toolError(err)
 	}
-	if err := s.project.Heartbeat(s.root.RootID); err != nil {
+	// An agent keeping itself alive keeps ITSELF alive. Heartbeating the session
+	// instead would be the worst of both: the session lives on the strength of an
+	// agent's work, and the agent's own claims lapse while it is still working.
+	me := s.actingRoot(req)
+	if err := s.project.Heartbeat(me.RootID); err != nil {
 		return nil, RootHeartbeatOutput{}, toolError(rootErr(err))
 	}
-	return nil, RootHeartbeatOutput{RootID: s.root.RootID, LastSeenAt: store.Now()}, nil
+	return nil, RootHeartbeatOutput{RootID: me.RootID, LastSeenAt: store.Now()}, nil
 }
 
 // RootDeregisterOutput confirms the root ended.

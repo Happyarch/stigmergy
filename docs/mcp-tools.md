@@ -1,6 +1,6 @@
 # MCP tool reference
 
-The `stigmergy` MCP server exposes 21 tools over stdio. Hosts namespace them, so
+The `stigmergy` MCP server exposes 26 tools over stdio. Hosts namespace them, so
 an agent sees them as `mcp__stigmergy__context_open` and so on.
 
 Source: `internal/mcpserver/`. If this document and the code disagree, the code is
@@ -96,6 +96,30 @@ code.
 
 Every tool can return `internal`; it is not repeated in the per-tool lists below.
 
+### Text you write is validated, everywhere
+
+Every string an agent authors — memory descriptions and bodies, mail subjects and
+bodies, claim reasons, branches, worktrees, session labels, models, verification
+reasons, evidence patterns — is checked before it is stored, so `invalid_input` from
+any of them may be about the *text* rather than the argument's shape. The message
+names the field and the offending character's position.
+
+- **Rejected:** control characters and DEL (tab and newline excepted), invalid UTF-8,
+  bidirectional overrides (U+202A–E, U+2066–9), a newline in a one-line field, and
+  over-length values (500 characters for the one-line fields; paths are uncapped).
+- **Fixed for you, silently:** a byte-order mark, CRLF and lone CR (converted to
+  newlines), surrounding whitespace.
+
+The two rejections that look excessive are the ones that matter most: this text is
+displayed in other agents' terminals and read as instruction, so an escape sequence
+stored here executes in the next reader's terminal, and a bidi override makes text
+render in an order it is not written in. Writing them as visible escapes is always fine — it is the invisible
+character itself that is refused.
+
+Writing a body as a JSON-encoded string is the common accident: a body full of
+literal `\n` and no real line breaks is refused, because it arrives unreadable.
+Send real newlines; the transport already encodes them for you.
+
 ---
 
 ## Context and roots
@@ -155,16 +179,28 @@ claim guard recognizes *your* edits as yours. Register without it and the guard
 cannot match your session to your root, so **your own claims will block your own
 edits**. The session-start hook tells the agent exactly what value to use.
 
-`resumed: true` means an existing live root matching
-`(agent_kind, worktree, session_label)` was reconnected rather than a new one
-created — same `root_id`, claims intact. This is what keeps a host restart
-(Claude `/clear`, Codex compact) from stranding live claims.
+`resumed: true` means an existing live root matching `(agent_kind, session_label)`
+was reconnected rather than a new one created — same `root_id`, claims intact. This
+is what keeps a host restart (Claude `/clear`, Codex compact) from stranding live
+claims.
+
+`worktree` is **not** part of that key, and used to be. A root is an agent, not a
+directory: registering from a second worktree minted a second root for one session
+while the read path (`RootBySession`, which the claim guard uses) went on matching
+`(agent_kind, session_label)` alone, so the abandoned root lapsed and released claims
+the agent still believed it held.
 
 `worktree` is genuinely required: an empty one is rejected with `invalid_input`,
-never defaulted. Because a root resumes on `(agent_kind, worktree, session_label)`,
-registering under a worktree the caller never named would make the *next* session's
-resume miss — and strand this root's claims until they timed out. `context_open`
-returns `worktree_root`; pass that.
+never defaulted. It is where the agent says it is working — reported in the roster
+and in every conflict message — and a value the caller never chose would be
+misleading in both. `context_open` returns `worktree_root`; pass that.
+
+On Claude Code you will rarely call this at all: the server registers the session
+from the environment before it serves, and each agent inside that session gets its
+own root automatically, labelled `"<session>#<type>:<id>"`. `root_register` is
+refused to those agents — along with the mailbox and memory writes — because what
+they may do is bounded by how long they live, not by rank. They claim; the session
+root remembers. See [architecture.md §8](architecture.md#8-agents-inside-a-session-explorers-and-the-root-gate).
 
 ### `root_list_active`
 
@@ -896,7 +932,8 @@ stigmergy is the shared memory and coordination layer for every agent in this re
 
 The extended block that follows covers memories (CAS, scopes, what makes a memory
 worth keeping), claims (narrowest scope, renew, release, negotiate on conflict, and
-what each host can and cannot enforce), the mailbox, and the root/subagent rule.
+what each host can and cannot enforce), the mailbox, and who counts as a root —
+including the agents running inside one session on a host that identifies them.
 It is in `internal/mcpserver/instructions.go` and is the single place to change what
 every agent is told. The sentences naming hosts are rendered from
 `internal/hosts`, so a new host cannot leave a stale one behind.

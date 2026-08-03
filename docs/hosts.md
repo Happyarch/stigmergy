@@ -15,9 +15,9 @@ comes from. The text every agent reads is rendered from those axes rather than
 written per host. That is not tidiness: the per-host copies used to contradict each
 other, and an agent told the wrong one stops checking claims.
 
-| | Claims | Mail | Subagents |
+| | Claims | Mail | Agents inside a session |
 |---|---|---|---|
-| Claude Code | blocked before the edit | enforced at end of turn | gated |
+| Claude Code | blocked before the edit | enforced at end of turn | identified: each holds its own claims |
 | Antigravity | blocked before the edit | enforced at end of turn | not visible — advisory |
 | opencode | blocked before the edit | advisory | gated, via the session's parent |
 | Codex | warned, halted after the edit | advisory | not visible — advisory |
@@ -80,15 +80,16 @@ left alone rather than silently swallowed.
 
 ### `.claude/settings.json`
 
-Six hook entries:
+Seven hook entries:
 
 | Event | Matcher | Command |
 |---|---|---|
 | `SessionStart` | — | `stigmergy hook session-start` |
 | `UserPromptSubmit` | — | `stigmergy hook mail-notify` |
 | `PreToolUse` | `Edit\|Write\|NotebookEdit` | `stigmergy hook claim-guard` |
-| `PreToolUse` | `mcp__stigmergy__(root_register\|root_heartbeat\|root_deregister\|memory_write\|memory_promote\|memory_delete\|claim_acquire\|claim_renew\|claim_release\|mailbox_.*)` | `stigmergy hook root-gate` |
+| `PreToolUse` | `mcp__stigmergy__(root_.*\|memory_write\|memory_promote\|memory_delete\|memory_evidence_set\|memory_evidence_clear\|memory_verify\|claim_.*\|mailbox_.*)` | `stigmergy hook root-gate` |
 | `Stop` | — | `stigmergy hook mail-gate` |
+| `SubagentStop` | — | `stigmergy hook subagent-stop` |
 | `SessionEnd` | — | `stigmergy hook session-end` |
 
 It also sets:
@@ -152,7 +153,8 @@ It also lists any claims other agents currently hold, so the agent starts the
 session knowing where the walls are. In a project that has not adopted stigmergy it
 **emits nothing at all** and stays out of the way.
 
-**`claim-guard`** is the only place claims are truly enforced. It reads `session_id`,
+**`claim-guard`** is the only place claims are truly enforced. It reads `session_id`
+and `agent_id` (so a peer is judged as itself, not as the session it lives in),
 `cwd`, and the path from `tool_input` (`file_path`, `notebook_path`, or `path`). On
 a conflict it emits:
 
@@ -172,18 +174,50 @@ An allowed edit prints **nothing**. See
 [§5.8 of architecture.md](architecture.md#58-failure-directions-are-chosen-per-failure-not-globally)
 for why an unparseable payload allows and a broken database denies.
 
-**`root-gate`** denies the mutating `mcp__stigmergy__*` tools when the payload shows
-a subagent indicator:
+**`root-gate`** is what makes a session's agents visible to stigmergy as individuals.
 
-> `stigmergy: <tool> may only be called by a root session, and this call comes from a subagent (<field>). Report your findings to your root and let it record them: memories, claims and mail are the root's to write.`
+Claude Code can run several agents at once inside one session — a main thread and the
+peers it dispatches. They share a session id, and they share the one stigmergy server
+that session started, so without this hook every one of them looks like the same
+agent. What you get with it:
 
-Which field identifies a subagent is **not documented by the host**. The code scans
-a candidate set (`subagent_type`, `agent_type`, `is_subagent`, `parent_tool_use_id`,
-and camelCase variants) and treats *absence of any indicator as "root"*, on purpose:
-guessing "subagent" would lock a root out of its own tools. **Whether any such field
-exists at all is unverified.** If none does, this gate is advisory and the enforced
-explorer path is a read-only agent definition. Settle it with `stigmergy hook dump`:
-capture a root's payload and a subagent's, and diff them.
+- **Each agent holds its own claims.** A file claimed by one peer blocks its
+  neighbours exactly as it would block a stranger, and `stigmergy watch` lists them
+  separately — `<session id>#general-purpose:a4d39a33…` beside the session itself.
+- **Their claims are released when they finish**, not fifteen minutes later (see
+  `subagent-stop` below).
+- **Memory and mail stay with the session.** An agent that tries anyway is told so,
+  and told what it *can* do:
+
+  > `stigmergy: mcp__stigmergy__memory_write belongs to the session root, not to you — memories outlive you. You do have an identity of your own and you may claim files with it: claim_acquire, claim_renew and claim_release all work, and the claims you take are yours and block everyone else. Report anything worth remembering to your root and let it record what lasts.`
+
+That division is about how long an agent lives, not about rank. A peer exists for a
+minute or two: it can take a file and give it back, which is all a claim is, but it
+cannot read a reply that arrives after it has finished, and a memory it writes will
+be read by agents who have no way to ask it what it meant.
+
+**If this hook is not installed**, nothing breaks — every call is attributed to the
+session, which is how stigmergy behaved before any of this existed. What you lose is
+the separation: two peers editing the same file stop blocking each other.
+
+How it works, briefly, because it is not obvious that it *can*: Claude Code tells the
+hook which agent is calling (`agent_id`, `agent_type` — present only for peers, and
+alongside the same `session_id` the main thread reports), and tells the server the
+id of the call being made (`_meta["claudecode/toolUseId"]`). The hook is handed that
+same id, so it can leave a note under it that the server picks up. Neither value is
+anything the model chooses, which is why this is identity rather than an assertion —
+an agent claiming to be someone else changes nothing.
+
+None of those fields appear in Claude Code's documentation; they were read off a live
+2.1.220 session (see [Probing the hosts](#probing-the-hosts)). If a future version
+stops sending them, calls fall back to the session root and the tests covering this
+fail loudly rather than quietly re-merging everyone into one identity.
+
+**`subagent-stop`** ends an agent and frees whatever it claimed, the moment it
+finishes. Without it, a peer's claim would go on blocking the repository for the full
+root TTL — held by an agent that is already gone and cannot be negotiated with, which
+would make giving peers claims a worse deal than not having them. `session-end` does
+the same for the session and every agent that ran inside it.
 
 **`mail-gate`** (`Stop`) is how the mailbox is actually delivered. When an agent
 tries to end its turn with mail it has never been shown, the hook returns
@@ -699,5 +733,29 @@ generator, and part ids turned out to need a `prt` prefix that nothing anywhere
 mentions — a plugin that gets it wrong has its text silently dropped and reports no
 error at all. Neither would have been found by reasoning, and both would have shipped.
 
-Use it to settle the assumptions this document flags as unverified — in particular
-the subagent indicator: capture a root's payload and a Task subagent's, and diff them.
+Use it to settle the assumptions this document flags as unverified. The largest of
+them is now closed by exactly this method: dumping a main thread's `PreToolUse`
+payload beside a peer agent's showed `agent_id` and `agent_type` present in one and
+absent in the other, with the same `session_id` — the fields the whole per-agent
+identity now rests on, none of which appear in any documentation.
+
+### Probing the MCP side
+
+Hooks are only half a host's contract, and `hook dump` cannot reach the other half:
+what the host puts in a `tools/call`. There is no hook there, so wrap the server
+instead. Two lines:
+
+```sh
+#!/bin/sh
+exec tee -a "$0.in.jsonl" | exec stigmergy mcp
+```
+
+Name that script as the server command in a throwaway config
+(`claude -p --mcp-config <file> --strict-mcp-config …`), drive one call through it,
+and read the raw JSON-RPC. That is how `_meta["claudecode/toolUseId"]` was found —
+undocumented, and the join that makes an agent's identity survive from the hook into
+the server.
+
+Two traps, both cost a run: `--allowedTools` is variadic and will swallow a trailing
+positional prompt, so pipe the prompt in on stdin instead; and a host that has already
+started keeps the server process it launched, so a probe must be a fresh session.

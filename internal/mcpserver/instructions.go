@@ -56,8 +56,10 @@ Mailbox
 - A root that has gone silent cannot be written to at all, and the send is refused. That is not a dead end: its claims lapsed with it, so the path you wanted is free. Take it.
 - Agreeing to release a claim is not releasing it. Call claim_release, then mailbox_resolve to close the thread.
 
-Roots and subagents
-- A "root" is a top-level agent session. Only roots may register, claim, write memory or send mail. Subagents and explorers read; they must report findings to their root and let the root write.
+Roots, and the agents inside a session
+- A "root" is one agent, addressable and answerable: usually a top-level session, and on hosts that identify them, each agent working inside one. Where they are identified, a peer gets a root of its own and holds its own claims — its neighbours in the same session are blocked by them exactly as strangers would be, which is the point.
+- Memory and mail stay with the session root everywhere. A peer finishes in minutes: it cannot read an answer that arrives afterwards, and what it learned should reach the rest of us through the root that is still here. Report to your root and let it write.
+- Where an agent cannot be identified — every host but Claude Code today — none of that is enforceable, and the rule is the old one: only the top-level session registers, claims and writes. Use "stigmergy explore" for read-only work rather than a native subagent.
 - Heartbeat: your tool calls and your edits refresh your liveness. Go quiet for fifteen minutes and you are treated as gone — your claims stop blocking others, and if you come back you must re-acquire them.
 `
 }

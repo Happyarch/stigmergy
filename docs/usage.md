@@ -269,8 +269,9 @@ meant to be run by hand.
 
 ### `stigmergy hook …`
 
-The hook handlers: `claim-guard`, `root-gate`, `session-start`, `session-end`,
-`codex-session-start`, `codex-claim-warn`, `codex-claim-stop`. They read a host's
+The hook handlers: `claim-guard`, `root-gate`, `subagent-stop`, `session-start`,
+`session-end`, `mail-gate`, `mail-notify`, `codex-session-start`, `codex-claim-warn`,
+`codex-claim-stop`, and the Antigravity and opencode equivalents. They read a host's
 JSON payload on stdin and write a decision on stdout. `init` wires them up; you do
 not run them yourself.
 
@@ -278,6 +279,21 @@ not run them yourself.
 instrument: point a host hook at it and it appends the raw payload to
 `$XDG_STATE_HOME/stigmergy/probe.jsonl`. It is how the undocumented corners of the
 two hosts' hook payloads get settled — see [hosts.md](hosts.md#probing-the-hosts).
+
+### `stigmergy project …`
+
+`create`, `add`, `remove`, `list` — group several repositories into one project so
+they share a database, a roster and a mailbox. Nothing here is needed for a project
+that is one repository, which is almost all of them. See
+[Several repositories, one project](#several-repositories-one-project) below.
+
+### `stigmergy deliberate`
+
+Put a specification through agents that take turns attacking it: draft, interrogate,
+revise, tear down, judge, rotate, repeat. Each runs at the real repository path inside
+a bwrap overlay whose writes land in RAM, so your working tree is never touched and
+does not need to be clean. It is a separate subsystem with its own document —
+[deliberation.md](deliberation.md) — and is not part of the memory/claims loop above.
 
 ### `stigmergy db path` / `stigmergy db migrate`
 

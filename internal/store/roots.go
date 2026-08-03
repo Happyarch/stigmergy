@@ -361,10 +361,26 @@ func (d *DB) Heartbeat(rootID string) error {
 // resolving the root and refreshing it has to be one round trip. It returns
 // ErrNoRoot for an unregistered session, which hooks ignore: an agent that never
 // registered has no claims to keep alive, and nothing to heartbeat.
+// It refreshes the session's own root as well when the label is an agent's.
+// An agent doing something is proof its session is alive — they are the same
+// process — and the session root is usually the one holding the claims that
+// matter while it waits for its agents to come back. Without this, dispatching a
+// long-running peer and waiting for it would look exactly like being dead: the
+// session goes fifteen minutes without a tool call of its own and loses every
+// claim it took, to a TTL that exists to detect crashes.
 func (d *DB) HeartbeatSession(agentKind, sessionLabel string) error {
 	if sessionLabel == "" {
 		return ErrNoRoot
 	}
+	if session := SessionOf(sessionLabel); session != sessionLabel {
+		// Best-effort: an agent whose session never registered (or has already
+		// ended) still heartbeats itself, which is the call that was asked for.
+		_ = d.heartbeatLabel(agentKind, session)
+	}
+	return d.heartbeatLabel(agentKind, sessionLabel)
+}
+
+func (d *DB) heartbeatLabel(agentKind, sessionLabel string) error {
 	tx, err := d.Begin()
 	if err != nil {
 		return serr.Internalf(err, "failed to begin transaction")
@@ -479,6 +495,46 @@ func (d *DB) DeregisterRoot(rootID string) error {
 		return serr.Internalf(err, "failed to commit deregistration")
 	}
 	return nil
+}
+
+// RootsOfSession lists the active roots belonging to one host session: the
+// session's own root, and one per agent that has worked inside it.
+//
+// The prefix match is on the label separator, never on the bare session id, so
+// a session whose id is a prefix of another's cannot collect its neighbour's
+// agents. Ids are UUIDs here and that cannot arise today; the query should not
+// depend on that staying true.
+func (d *DB) RootsOfSession(agentKind, sessionID string) ([]Root, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	rows, err := d.Query(
+		`SELECT `+rootCols+` FROM roots
+		  WHERE agent_kind = ? AND ended_at IS NULL
+		    AND (session_label = ? OR session_label LIKE ? ESCAPE '\')
+		  ORDER BY registered_at`,
+		agentKind, sessionID, escapeLike(sessionID)+`#%`)
+	if err != nil {
+		return nil, serr.Internalf(err, "failed to list the session's roots")
+	}
+	defer rows.Close()
+
+	out := []Root{}
+	for rows.Next() {
+		r, err := scanRoot(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+// escapeLike defuses the wildcards in a value being spliced into a LIKE
+// pattern. A session id containing '%' would otherwise match every session.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // ReapStaleRoots ends roots that went silent long ago. Claims are already

@@ -132,11 +132,11 @@ func SessionStartText(agentKind, sessionID, cwd string) string {
 			"address the root that holds the path — root_list_active tells you who is here and what they hold.\n")
 	}
 
-	// Mail survives a session. A root resumes on (agent_kind, worktree,
-	// session_label), so an agent that was compacted or cleared comes back to the
-	// same mailbox — and to whatever arrived while it was away. Unshown, that mail
-	// would wait for the end of the first turn; shown here, it can shape the work
-	// instead of interrupting it.
+	// Mail survives a session. A root resumes on (agent_kind, session_label), so an
+	// agent that was compacted or cleared comes back to the same mailbox — and to
+	// whatever arrived while it was away. Unshown, that mail would wait for the end
+	// of the first turn; shown here, it can shape the work instead of interrupting
+	// it.
 	if text := MailText(CheckMail(agentKind, sessionID, cwd)); text != "" {
 		sb.WriteString("\n")
 		sb.WriteString(text)
@@ -201,9 +201,15 @@ func activeClaimSummary(p *opened) string {
 	return sb.String()
 }
 
-// EndSession ends the host session's root so its claims are freed immediately.
-// Everything here is best-effort: the session is already over, and the root TTL
-// is the backstop if this does not land.
+// EndSession ends the host session's roots so their claims are freed
+// immediately. Everything here is best-effort: the session is already over, and
+// the root TTL is the backstop if this does not land.
+//
+// Roots, plural. A session holds one root of its own and one for each agent that
+// ran inside it, and an agent's root is exactly as gone as its session when the
+// process exits. Ending only the session's own root would leave the peers'
+// claims blocking every other agent in the repository for the full TTL, held by
+// a root that cannot even be written to.
 func EndSession(agentKind, sessionID, cwd string) {
 	p, ok := openQuietly(cwd, writable)
 	if !ok {
@@ -212,11 +218,62 @@ func EndSession(agentKind, sessionID, cwd string) {
 	db := p.DB
 	defer db.Close()
 
-	root, err := db.RootBySession(agentKind, sessionID)
+	roots, err := db.RootsOfSession(agentKind, sessionID)
+	if err != nil {
+		return
+	}
+	for _, r := range roots {
+		_ = db.DeregisterRoot(r.RootID)
+	}
+}
+
+// EndAgent ends one agent's root when that agent finishes, without touching the
+// session it ran in.
+//
+// This is what makes a peer's claim safe to grant in the first place. A peer
+// lives for a minute or two, and if its claims outlived it by the full TTL the
+// coordination would cost more than it bought: the files it touched would stay
+// locked long after anyone was there to negotiate over them.
+func EndAgent(agentKind, label, cwd string) {
+	if label == "" {
+		return
+	}
+	p, ok := openQuietly(cwd, writable)
+	if !ok {
+		return
+	}
+	db := p.DB
+	defer db.Close()
+
+	root, err := db.RootBySession(agentKind, label)
 	if err != nil {
 		return
 	}
 	_ = db.DeregisterRoot(root.RootID)
+}
+
+// StampCaller records which agent is about to make an MCP call, so the server —
+// which shares one connection between every agent in the session and therefore
+// cannot tell them apart — can attribute it correctly.
+//
+// Best-effort, and silent when it fails: an unstamped call falls back to the
+// session root, which is what every call did before this existed. It must never
+// cost the agent its tool call.
+func StampCaller(agentKind, label, cwd, toolUseID string) {
+	if toolUseID == "" || label == "" {
+		return
+	}
+	p, ok := openQuietly(cwd, writable)
+	if !ok {
+		return
+	}
+	db := p.DB
+	defer db.Close()
+
+	_ = db.PutCallerTicket(store.CallerTicket{
+		ToolUseID: toolUseID, SessionLabel: label,
+		AgentKind: agentKind, Worktree: p.Repo.WorktreeRoot,
+	})
 }
 
 // AuditCodexConflict records an edit that landed on a claimed path.
