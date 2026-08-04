@@ -538,6 +538,7 @@ func TestToolsAreAdvertisedWithSchemas(t *testing.T) {
 		"memory_delete": false, "memory_evidence_set": false, "memory_evidence_clear": false,
 		"memory_verify": false, "memory_history": false,
 		"memory_link": false, "memory_unlink": false,
+		"episode_record": false, "episode_read": false, "episode_list": false,
 		"claim_acquire": false, "claim_check": false,
 		"claim_list_active": false, "claim_renew": false, "claim_release": false,
 		"mailbox_send": false, "mailbox_inbox": false, "mailbox_thread": false, "mailbox_threads": false,

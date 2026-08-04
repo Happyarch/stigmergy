@@ -120,6 +120,14 @@ type MemoryReadOutput struct {
 	// LinksTotal is set only when the list above was truncated to
 	// store.MaxNeighborsSurfaced.
 	LinksTotal int `json:"links_total,omitempty"`
+	// Provenance is the episodes that ground this memory — the citations for
+	// where the lesson came from. Project scope only (episodes have no global
+	// equivalent); always present when found, empty array when none, never
+	// omitted, for the same reason Links never is.
+	Provenance []store.EpisodeCitation `json:"provenance"`
+	// ProvenanceTotal is set only when the list above was truncated to
+	// store.MaxProvenanceSurfaced.
+	ProvenanceTotal int `json:"provenance_total,omitempty"`
 }
 
 func (s *Session) memoryRead(_ context.Context, _ *mcp.CallToolRequest, in MemoryReadInput) (*mcp.CallToolResult, MemoryReadOutput, error) {
@@ -134,7 +142,7 @@ func (s *Session) memoryRead(_ context.Context, _ *mcp.CallToolRequest, in Memor
 	}
 	m, err := db.ReadMemory(in.Key)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, MemoryReadOutput{Found: false, Links: []store.Neighbor{}}, nil
+		return nil, MemoryReadOutput{Found: false, Links: []store.Neighbor{}, Provenance: []store.EpisodeCitation{}}, nil
 	}
 	if err != nil {
 		return nil, MemoryReadOutput{}, toolError(err)
@@ -144,13 +152,25 @@ func (s *Session) memoryRead(_ context.Context, _ *mcp.CallToolRequest, in Memor
 		return nil, MemoryReadOutput{}, toolError(err)
 	}
 	s.touch()
-	out := MemoryReadOutput{Found: true, Memory: m, Links: []store.Neighbor{}}
+	out := MemoryReadOutput{Found: true, Memory: m, Links: []store.Neighbor{}, Provenance: []store.EpisodeCitation{}}
 	if list := neighbors[in.Key]; len(list) > 0 {
 		if len(list) > store.MaxNeighborsSurfaced {
 			out.LinksTotal = len(list)
 			list = list[:store.MaxNeighborsSurfaced]
 		}
 		out.Links = list
+	}
+	if db.Kind == store.Project {
+		prov, err := db.EpisodeProvenanceFor([]string{in.Key})
+		if err != nil {
+			return nil, MemoryReadOutput{}, toolError(err)
+		}
+		if entry, ok := prov[in.Key]; ok {
+			out.Provenance = entry.Citations
+			if entry.Total > len(entry.Citations) {
+				out.ProvenanceTotal = entry.Total
+			}
+		}
 	}
 	return nil, out, nil
 }

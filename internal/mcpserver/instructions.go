@@ -57,6 +57,13 @@ Mailbox
 - A root that has gone silent cannot be written to at all, and the send is refused. That is not a dead end: its claims lapsed with it, so the path you wanted is free. Take it.
 - Agreeing to release a claim is not releasing it. Call claim_release, then mailbox_resolve to close the thread.
 
+Episodes
+- An episode is what HAPPENED — a session, an investigation, a failure and why — not what is true. episode_record(title, body, memory_keys?, note?, corrects_episode_id?, continues_episode_id?) writes one. Record failures and dead ends: they are the episodes future agents need most, not just what worked.
+- IMMUTABLE. There is no update tool, ever. Wrong reasoning is corrected by a NEW episode with corrects_episode_id, or resumed with continues_episode_id — never by rewriting what you wrote. episode_read always returns the chain of later episodes that correct or continue the one you asked for, so superseded reasoning is never read alone.
+- Semanticize what generalizes: when an episode teaches something durable, write the lesson as a memory and ground it (memory_keys on episode_record), so the memory carries a citation for where it came from. Episodes are history and may eventually be pruned if nothing cites or chains them; memories they ground are not.
+- episode_list(since?, before?, query?, limit?) is the episodic search surface, recent-first. memory_search stays memories-only.
+- Session roots record episodes for work their peers report to them — like memory and mail, this is session-root-only.
+
 Roots, and the agents inside a session
 - A "root" is one agent, addressable and answerable: usually a top-level session, and on hosts that identify them, each agent working inside one. Where they are identified, a peer gets a root of its own and holds its own claims — its neighbours in the same session are blocked by them exactly as strangers would be, which is the point.
 - Memory and mail stay with the session root everywhere. A peer finishes in minutes: it cannot read an answer that arrives afterwards, and what it learned should reach the rest of us through the root that is still here. Report to your root and let it write.

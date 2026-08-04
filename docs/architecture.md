@@ -241,6 +241,54 @@ ordering comment below), and there is no cross-scope motivation once general
 knowledge is understood to live in the agent's weights rather than in a node
 here. `memories` and `memories_fts` are untouched by this table.
 
+### Episodes (project only)
+
+```sql
+CREATE TABLE episodes (         -- 0013; history, not state
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL,     -- immutable once written
+  actor      TEXT NOT NULL,
+  agent_kind TEXT NOT NULL,
+  at         TEXT NOT NULL
+);
+
+CREATE TABLE episode_memory (   -- provenance: this episode grounds that memory
+  episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  key        TEXT NOT NULL REFERENCES memories(key) ON DELETE CASCADE,
+  note       TEXT NOT NULL,
+  PRIMARY KEY (episode_id, key)
+);
+
+CREATE TABLE episode_links (    -- correction/continuation chains
+  episode_id   INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  successor_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL CHECK (kind IN ('corrects','continues')),
+  PRIMARY KEY (episode_id, successor_id),
+  CHECK (episode_id != successor_id)
+);
+
+CREATE VIRTUAL TABLE episodes_fts USING fts5(
+  title, body,
+  content='episodes', content_rowid='id',
+  tokenize='porter unicode61'
+);
+```
+
+A `memories`-shaped record for what *happened* rather than what is true — see
+[docs/association-model.md](association-model.md) §4. IMMUTABLE: no update
+tool exists at the Go layer, ever; a wrong episode is corrected by a new one
+chained on top with `episode_links.kind = 'corrects'`, and `episode_read`
+walks the full chain from any episode in it, so superseded reasoning is never
+read alone. Project scope only — episodes are session-bound, and the global
+database has no roots or sessions. `episodes_fts` is a **separate** virtual
+table cloned from `memories_fts`'s trigger pattern (0001_init.sql); it does
+not touch `memories_fts`, whose schema this whole design keeps frozen.
+GC (`gc.go`) reclaims an episode only once it is old, ungrounded (no
+`episode_memory` row) and unchained (no `episode_links` row on either side) —
+consolidation as retention policy, not decay: distilled-and-cited history is
+provenance and stays.
+
 ### Roots (project only)
 
 ```sql
@@ -754,7 +802,7 @@ fixable by whoever knows.
 | `paths` | absolute/relative → repo-relative POSIX; symlinks; worktree-escape | agents write files that *don't exist yet*, so it resolves the deepest existing ancestor and re-appends the missing tail |
 | `gitx` | worktree root + git common dir, pure Go, with a subprocess fallback | the hook path uses the pure-Go path only — shelling out to `git` on every edit would blow the latency budget |
 | `project` | which project governs a directory, and which of its repositories a path is in | resolution runs on the hook path, so it is filesystem-only by construction: one `gitx` walk and one small file read, no subprocess and no query |
-| `mcpserver` | the MCP server: session state machine, 28 tools, instructions | |
+| `mcpserver` | the MCP server: session state machine, 31 tools, instructions | |
 | `hooks` | the host hook protocols and the shared `Guard` fast path | Claude and Codex differ in *protocol*, not in *decision* — one guard, two renderings |
 | `hosts` | what each host can enforce, declared once along the axes that vary | the per-host copies of that text used to contradict each other; every rule an agent reads is now rendered from here |
 | `drift` | what has CHANGED in a memory's declared scope since a recorded commit | it measures change and never truth — keeping it out of `store` keeps that distinction structural (see memory-model.md) |

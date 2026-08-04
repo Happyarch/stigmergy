@@ -180,6 +180,33 @@ func exerciseEveryWritePath(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 
+	// memory_links.created_at.
+	if _, err := db.WriteMemory(MemoryWrite{
+		Key: "stamp-mem-a", Type: "project", Description: "a", Body: "a body", UpdatedBy: sender.RootID,
+	}, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.WriteMemory(MemoryWrite{
+		Key: "stamp-mem-b", Type: "project", Description: "b", Body: "b body", UpdatedBy: sender.RootID,
+	}, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateLink("stamp-mem-a", "stamp-mem-b", "for the timestamp test", sender.RootID, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+
+	// priming_delivered.at.
+	if err := db.MarkPrimed(sender.RootID, []string{"stamp-mem-a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// episodes.at.
+	if _, err := db.RecordEpisode(RecordEpisode{
+		Title: "stamp test episode", Body: "exercises episodes.at", Actor: sender.RootID, AgentKind: "claude-code",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	// audit_log.at is written by everything above, but assert the premise.
 	var audits int
 	if err := db.QueryRow(`SELECT count(*) FROM audit_log`).Scan(&audits); err != nil {

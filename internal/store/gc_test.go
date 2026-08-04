@@ -67,7 +67,7 @@ func TestGCPrunesOldAuditAndResolvedMail(t *testing.T) {
 	var audit, mail int
 	at(t, now, func() {
 		var err error
-		audit, mail, err = db.GC()
+		audit, mail, _, err = db.GC()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -94,6 +94,91 @@ func TestGCPrunesOldAuditAndResolvedMail(t *testing.T) {
 	}
 }
 
+// GC's episode pruning: consolidation as retention policy
+// (docs/association-model.md §10.3). Old AND ungrounding AND unchained is
+// prunable; any one of the other two properties keeps it.
+func TestGCPrunesOnlyOldUngroundedUnchainedEpisodes(t *testing.T) {
+	db := testProject(t)
+	long := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := long.Add(200 * 24 * time.Hour) // older than EpisodeRetention
+
+	var prunable, citedID, chainedID, recentID int64
+	at(t, long, func() {
+		mustWrite(t, db, "alpha")
+		ep, err := db.RecordEpisode(RecordEpisode{
+			Title: "prunable", Body: "b", Actor: "r-test", AgentKind: "claude-code",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		prunable = ep.ID
+
+		cited, err := db.RecordEpisode(RecordEpisode{
+			Title: "cited", Body: "b", Actor: "r-test", AgentKind: "claude-code",
+			MemoryKeys: []string{"alpha"}, Note: "grounds it",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		citedID = cited.ID
+
+		chained, err := db.RecordEpisode(RecordEpisode{
+			Title: "chained", Body: "b", Actor: "r-test", AgentKind: "claude-code",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		chainedID = chained.ID
+	})
+	// The correction is recent, but what makes "chained" unprunable is that
+	// something points AT it — episode_links(episode_id=chainedID).
+	at(t, now, func() {
+		if _, err := db.RecordEpisode(RecordEpisode{
+			Title: "the correction", Body: "b", Actor: "r-test", AgentKind: "claude-code",
+			CorrectsEpisodeID: &chainedID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		recentEp, err := db.RecordEpisode(RecordEpisode{
+			Title: "recent", Body: "b", Actor: "r-test", AgentKind: "claude-code",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recentID = recentEp.ID
+	})
+
+	var episodesPruned int
+	at(t, now, func() {
+		_, _, episodesPruned, _ = mustGC(t, db)
+	})
+	if episodesPruned != 1 {
+		t.Fatalf("episodesPruned = %d, want exactly 1 (the prunable one)", episodesPruned)
+	}
+
+	if _, err := db.ReadEpisode(prunable); err == nil {
+		t.Error("the old, ungrounded, unchained episode survived GC")
+	}
+	if _, err := db.ReadEpisode(citedID); err != nil {
+		t.Errorf("an old but CITED episode was pruned: %v", err)
+	}
+	if _, err := db.ReadEpisode(chainedID); err != nil {
+		t.Errorf("an old but CHAINED episode was pruned: %v", err)
+	}
+	if _, err := db.ReadEpisode(recentID); err != nil {
+		t.Errorf("a recent episode was pruned: %v", err)
+	}
+}
+
+func mustGC(t *testing.T, db *DB) (int, int, int, error) {
+	t.Helper()
+	audit, mail, episodes, err := db.GC()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return audit, mail, episodes, err
+}
+
 func TestGCLeavesOpenClaims(t *testing.T) {
 	db := testProject(t)
 	root := mustRoot(t, db, "claude-code", "sess-x")
@@ -103,7 +188,7 @@ func TestGCLeavesOpenClaims(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := db.GC(); err != nil {
+	if _, _, _, err := db.GC(); err != nil {
 		t.Fatal(err)
 	}
 	active, err := db.ActiveClaims("")

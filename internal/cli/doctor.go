@@ -107,7 +107,7 @@ func runDoctorAll(out io.Writer, gc bool) error {
 		after, _ := p.SchemaVersion()
 		if gc {
 			_, _ = p.ReapStaleRoots()
-			_, _, _ = p.GC()
+			_, _, _, _ = p.GC()
 		}
 		// Text that would be refused today is worth surfacing in the sweep too:
 		// the memories most likely to be unreadable are in the projects nobody
@@ -582,11 +582,11 @@ func finish(d *diag, gc bool, project *store.DB) error {
 		} else {
 			d.pass("%d long-silent root(s) closed", roots)
 		}
-		audit, mail, err := project.GC()
+		audit, mail, episodes, err := project.GC()
 		if err != nil {
 			d.warn("old records could not be pruned: %v", err)
 		} else {
-			d.pass("%d old audit record(s) and %d resolved message(s) pruned", audit, mail)
+			d.pass("%d old audit record(s), %d resolved message(s) and %d stale episode(s) pruned", audit, mail, episodes)
 		}
 	}
 	if d.failed {

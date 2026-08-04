@@ -303,6 +303,16 @@ var stampColumns = []struct{ table, key, column string }{
 	{"mailbox_messages", "id", "notified_at"},
 	{"mailbox_threads", "id", "created_at"},
 	{"mailbox_threads", "id", "updated_at"},
+	// memory_links and priming_delivered have composite primary keys, not a
+	// single equality column repairColumn's UPDATE...WHERE key=? can target —
+	// rowid is the implicit single column every non-WITHOUT-ROWID table has.
+	{"memory_links", "rowid", "created_at"},
+	{"priming_delivered", "rowid", "at"},
+	// episodes.at decides GC retention (docs/association-model.md §10.3) by
+	// comparing this column as raw TEXT — the same short-form-vs-canonical
+	// skew this whole list exists to repair, and here it can silently exempt
+	// an episode from pruning instead of just sorting wrong.
+	{"episodes", "id", "at"},
 }
 
 // RepairStampColumns canonicalises timestamps outside the memory tables.

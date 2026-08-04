@@ -173,6 +173,46 @@ func injectors() []injector {
 			})
 			return err
 		}},
+		{"link.reason", true, true, false, func(t *testing.T, h *sanitationFixture, p string) error {
+			a, b := h.uniq("linka"), h.uniq("linkb")
+			if _, err := h.db.WriteMemory(MemoryWrite{
+				Key: a, Type: "project", Description: "d", Body: "b", UpdatedBy: "r-test",
+			}, "claude-code"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.db.WriteMemory(MemoryWrite{
+				Key: b, Type: "project", Description: "d", Body: "b", UpdatedBy: "r-test",
+			}, "claude-code"); err != nil {
+				t.Fatal(err)
+			}
+			_, err := h.db.CreateLink(a, b, p, "r-test", "claude-code")
+			return err
+		}},
+		{"episode.title", true, true, false, func(t *testing.T, h *sanitationFixture, p string) error {
+			_, err := h.db.RecordEpisode(RecordEpisode{
+				Title: p, Body: "a body", Actor: "r-test", AgentKind: "claude-code",
+			})
+			return err
+		}},
+		{"episode.body", false, false, false, func(t *testing.T, h *sanitationFixture, p string) error {
+			_, err := h.db.RecordEpisode(RecordEpisode{
+				Title: "a title", Body: p, Actor: "r-test", AgentKind: "claude-code",
+			})
+			return err
+		}},
+		{"episode.note", true, true, false, func(t *testing.T, h *sanitationFixture, p string) error {
+			key := h.uniq("grounded")
+			if _, err := h.db.WriteMemory(MemoryWrite{
+				Key: key, Type: "project", Description: "d", Body: "b", UpdatedBy: "r-test",
+			}, "claude-code"); err != nil {
+				t.Fatal(err)
+			}
+			_, err := h.db.RecordEpisode(RecordEpisode{
+				Title: "a title", Body: "a body", Actor: "r-test", AgentKind: "claude-code",
+				MemoryKeys: []string{key}, Note: p,
+			})
+			return err
+		}},
 	}
 }
 

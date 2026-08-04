@@ -111,6 +111,22 @@ func New(version, globalPath string) (*mcp.Server, *Session) {
 	}, s.memoryDelete)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "episode_record",
+		Description: "Record what happened: a session, an investigation, a failure and why. History, not truth — immutable once written. " +
+			"Optionally ground one or more memories (they cite this as where the lesson came from) and chain onto an earlier episode you are correcting or continuing.",
+	}, s.episodeRecord)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "episode_read",
+		Description: "Read one episode: its body, the memories it grounds, and — always — the chain of later episodes that correct or continue it.",
+	}, s.episodeRead)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "episode_list",
+		Description: "List episodes, most recent first, optionally filtered by a full-text query or a time window. The search surface for episodes; memory_search stays memories-only.",
+	}, s.episodeList)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "claim_acquire",
 		Description: "Reserve a file or directory before editing it, so no other agent edits it at the same time. Take the narrowest scope that covers your work, and release it when you are done.",
 	}, s.claimAcquire)

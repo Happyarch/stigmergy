@@ -1,6 +1,6 @@
 # MCP tool reference
 
-The `stigmergy` MCP server exposes 28 tools over stdio. Hosts namespace them, so
+The `stigmergy` MCP server exposes 31 tools over stdio. Hosts namespace them, so
 an agent sees them as `mcp__stigmergy__context_open` and so on.
 
 Source: `internal/mcpserver/`. If this document and the code disagree, the code is
@@ -304,6 +304,12 @@ always present — an empty array when there are none, up to 8 neighbors
 (`key`, `description`, `reason`, `linked_by`, `linked_at`), with `links_total`
 added when the list was truncated. See [Links](#links).
 
+Also `provenance[]`: the episodes that ground this memory — where the lesson
+came from — always present (empty when there are none), up to 5 citations
+(`episode_id`, `title`, `at`), with `provenance_total` added when truncated.
+Project scope only; a global memory's `provenance` is always `[]`, since
+episodes have no global equivalent. See [Episodes](#episodes).
+
 A missing key is **not an error** — it is a normal answer, `{"found": false}`.
 
 ### `memory_list`
@@ -482,6 +488,92 @@ associations unconditionally:
 - `memory_read` → `links[]` (§ above), always present.
 - `memory_search` → each hit's `linked[]` (§ above), always present.
 - `memory_list` → `link_count`, a number.
+
+## Episodes
+
+History, not state: what happened, distinct from what memories say is true.
+Project scope only — episodes are session-bound, and the global database has
+no roots or sessions to bind them to. All three tools are **session-root-only**,
+like mail and unlike `memory_read`/`memory_search`: a peer reports what it
+found to its root, and the root records it.
+
+### `episode_record`
+
+> Record what happened: a session, an investigation, a failure and why. History, not truth — immutable once written. Optionally ground one or more memories (they cite this as where the lesson came from) and chain onto an earlier episode you are correcting or continuing.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `title` | string | yes | one line: what happened |
+| `body` | string | yes | the record itself — immutable once written |
+| `memory_keys` | string[] | no | project memories this episode grounds |
+| `note` | string | required if `memory_keys` is non-empty | why it grounds all of them — one line |
+| `corrects_episode_id` | int | no | an earlier episode this one corrects |
+| `continues_episode_id` | int | no | an earlier episode this one resumes |
+| | | | State: **Registered** |
+
+**Returns** `episode`: `id`, `title`, `body`, `actor`, `agent_kind`, `at`.
+
+**IMMUTABLE.** There is no update tool, and there never will be — see
+docs/association-model.md Appendix A.8. A wrong episode is corrected by
+recording a **new** one with `corrects_episode_id`; an investigation that
+resumes is chained with `continues_episode_id`. Both endpoints must already
+exist, and grounding a memory key that does not exist is refused the same way.
+
+**Errors** — `wrong_state`; `invalid_input` (bad title/body, missing `note`
+when grounding, a `memory_keys` or episode id that does not exist, both
+`corrects_episode_id` and `continues_episode_id` naming the same episode).
+
+### `episode_read`
+
+> Read one episode: its body, the memories it grounds, and — always — the chain of later episodes that correct or continue it.
+
+| Parameter | Type | Required |
+|---|---|---|
+| `id` | int | yes |
+| | | State: **Registered** |
+
+**Returns** `found` (bool) and, when found, `episode`: the episode fields plus
+`grounds[]` (`key`, `note` — the memories it cites) and `successors[]`
+(`episode_id`, `title`, `kind` — `corrects` or `continues` —, `at`).
+
+`successors` is **never omitted and never behind a flag** — the whole point of
+an immutable, chained record is that superseded reasoning is never read
+without the correction that supersedes it. It walks the full chain, not just
+one hop: if episode A was corrected by B, which was later corrected by C,
+reading A shows both B and C.
+
+A missing id is **not an error** — `{"found": false}`.
+
+### `episode_list`
+
+> List episodes, most recent first, optionally filtered by a full-text query or a time window. The search surface for episodes; memory_search stays memories-only.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `since` | string | no | RFC3339; at or after this — inclusive |
+| `before` | string | no | RFC3339; at or before this — inclusive |
+| `query` | string | no | free text over title and body; all words must appear |
+| `limit` | int | no | default 20, capped at 50 |
+| | | | State: **Registered** |
+
+**Returns** `episodes[]`: the same fields `episode_record` returns, newest
+first regardless of whether `query` narrowed the set.
+
+`memory_search` deliberately never grew episodes or time filters: an extra
+result class interacting with its 20-hit cap would truncate differently than
+an agent expects. `episode_list(query)` is the episodic search surface instead.
+
+**Errors** — `wrong_state`; `invalid_input` (unparseable bound, `since` after
+`before`, an unevaluable `query`).
+
+### Consolidation and retention
+
+Episodes are prunable **history**, not permanent record: `stigmergy doctor
+--gc` reclaims an episode once it is *all* of: older than 180 days, grounds no
+memory, and sits in no correction/continuation chain (either side). An episode
+that any memory cites, or that any chain references, is never pruned — only
+undistilled, unchained residue is. Semanticizing a lesson (grounding a memory
+via `episode_record`'s `memory_keys`) is what keeps it past that window.
 
 ## Change evidence
 
