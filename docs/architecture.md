@@ -379,9 +379,24 @@ CREATE TABLE audit_log (
 );
 
 CREATE INDEX idx_audit_at ON audit_log(at);
+
+CREATE TABLE priming_delivered (   -- 0012; docs/association-model.md §9
+  root_id TEXT NOT NULL REFERENCES roots(root_id) ON DELETE CASCADE,
+  key     TEXT NOT NULL REFERENCES memories(key) ON DELETE CASCADE,
+  at      TEXT NOT NULL,
+  PRIMARY KEY (root_id, key)
+);
 ```
 
 `idx_audit_at` exists for GC, which deletes by age.
+
+`priming_delivered` is dedup for the end-of-turn priming nudge, not a
+mailbox: it rides the same Stop hook as mail (`stigmergy hook mail-gate`) so
+a session's held claims — its own and any agent's that ran inside it —
+surface memories whose declared evidence overlaps them, plus one hop of
+their linked neighbors, at most once per (root, memory). Keyed on the
+session's own root, since only the session's main thread ever sees a Stop
+hook.
 
 `notified_at` and `read_at` look redundant and are not. `notified_at` is *stigmergy's*
 record — we put this message in front of the agent — and `read_at` is the *agent's* —

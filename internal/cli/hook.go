@@ -32,8 +32,9 @@ func newHookCmd() *cobra.Command {
 	return cmd
 }
 
-// newMailGateCmd delivers mail at the end of a turn, by refusing to let the turn
-// end while there is undelivered mail.
+// newMailGateCmd delivers mail — and, riding the same interruption, a priming
+// note — at the end of a turn, by refusing to let the turn end while either is
+// undelivered.
 //
 // It is the answer to the mailbox's original defect: it was a pull channel with
 // nothing to pull it. An agent had to think to call mailbox_inbox, and an agent
@@ -43,13 +44,22 @@ func newHookCmd() *cobra.Command {
 // the start, and the mail arrives later.
 //
 // Blocking the Stop is the only place a message can be put in front of an agent
-// that is not asking for one. It costs the agent nothing when there is no mail —
-// which is almost always — and when there is, it arrives at the natural moment:
-// the agent has finished what it was doing and is about to walk away.
+// that is not asking for one. It costs the agent nothing when there is no mail
+// and nothing primed — which is almost always — and when there is, it arrives
+// at the natural moment: the agent has finished what it was doing and is about
+// to walk away.
+//
+// Priming (docs/association-model.md §9) rides this exact path for the same
+// reason mail does: an association an agent has to ask for won't be asked for,
+// and the Stop hook is the only place a nudge can be put in front of an agent
+// that isn't looking for one. The two are composed into ONE StopBlock — the
+// stop_hook_active guard below already prevents a loop, and two separate
+// interruptions for two unrelated reasons would just be two chances to feel
+// like nagging.
 func newMailGateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "mail-gate",
-		Short:        "Stop: hand the agent its mail before it finishes the turn",
+		Short:        "Stop: hand the agent its mail and any priming note before it finishes the turn",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -59,24 +69,32 @@ func newMailGateCmd() *cobra.Command {
 				return nil
 			}
 			// The agent is only still running because we blocked it last time.
-			// Blocking again would trap it: it has been shown the mail, and what
-			// it does about it is now its own business.
+			// Blocking again would trap it: it has been shown the mail and the
+			// note, and what it does about them is now its own business.
 			if in.StopHookActive {
 				return nil
 			}
 			hooks.Heartbeat("claude-code", in.SessionID, in.CWD)
 
 			mail := hooks.CheckMail("claude-code", in.SessionID, in.CWD)
+			priming := hooks.CheckPriming("claude-code", in.SessionID, in.CWD)
 			text := hooks.MailText(mail)
+			if primingText := hooks.PrimingText(priming); primingText != "" {
+				if text != "" {
+					text += "\n"
+				}
+				text += primingText
+			}
 			if text == "" {
 				return nil
 			}
 			if err := json.NewEncoder(os.Stdout).Encode(hooks.NewStopBlock(text)); err != nil {
-				// The mail was never written, so it stays undelivered and will
-				// interrupt again. Marking first would consume it silently.
+				// Nothing was actually shown, so neither stays undelivered:
+				// marking first would consume either silently.
 				return err
 			}
 			hooks.MarkDelivered("claude-code", in.SessionID, in.CWD, mail)
+			hooks.MarkPrimed(in.CWD, priming)
 			return nil
 		},
 	}

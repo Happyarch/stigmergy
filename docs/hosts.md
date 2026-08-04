@@ -233,14 +233,23 @@ sits unread while its sender waits for an answer that is never coming. Telling t
 agent harder does not fix that. The instruction is read once, at the start; the mail
 arrives later.
 
+The same hook also carries a **priming note**, when the agent's claims overlap what a
+memory has declared as its evidence: which memories to re-check before finishing, and
+their linked neighbors (see [association-model.md](association-model.md)). It rides
+this exact path for the same reason mail does — a nudge nobody is looking for has to be
+put in front of the agent, not left for it to go find — and composes into the same
+block rather than costing a second interruption. `priming_delivered` gives it the same
+once-only guarantee `notified_at` gives mail.
+
 Two things keep the gate from becoming a nuisance:
 
 - **`stop_hook_active`.** If the agent is only still running because this hook blocked
   it, the hook says nothing. Otherwise it would be a trap the agent could never leave.
-- **`notified_at`.** Each message interrupts exactly once. Delivery is stigmergy's
-  record that it put the mail in front of the agent — distinct from `read_at`, which is
-  the agent's record that it looked. An agent that reads its mail and decides to press
-  on is not nagged; a message that arrives mid-turn still gets its one interruption.
+- **`notified_at`** (mail) **and `priming_delivered`** (the note). Each message, and each
+  primed memory, interrupts exactly once. Delivery is stigmergy's record that it put
+  something in front of the agent — distinct from `read_at`, which is the agent's record
+  that it looked. An agent that reads its mail and decides to press on is not nagged; a
+  message that arrives mid-turn still gets its one interruption.
 
 **`mail-notify`** (`UserPromptSubmit`) is the gentle half: it injects the same summary
 as the turn begins, so mail can shape the work rather than interrupt it. It does *not*
