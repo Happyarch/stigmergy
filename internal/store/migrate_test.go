@@ -80,6 +80,9 @@ func TestRestoringIndexesOnADatabaseThatAlreadyLostThem(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE repos`); err != nil {
 		t.Fatalf("undoing 0007 (table): %v", err)
 	}
+	if _, err := db.Exec(`DROP TABLE memory_links`); err != nil {
+		t.Fatalf("undoing 0011: %v", err)
+	}
 	if _, err := db.Exec(`DROP TABLE caller_tickets`); err != nil {
 		t.Fatalf("undoing 0010: %v", err)
 	}

@@ -1,6 +1,6 @@
 # MCP tool reference
 
-The `stigmergy` MCP server exposes 26 tools over stdio. Hosts namespace them, so
+The `stigmergy` MCP server exposes 28 tools over stdio. Hosts namespace them, so
 an agent sees them as `mcp__stigmergy__context_open` and so on.
 
 Source: `internal/mcpserver/`. If this document and the code disagree, the code is
@@ -271,7 +271,7 @@ No parameters. State: **Registered** → drops back to **Opened**. Returns `root
 | | | | State: **Opened** |
 
 **Returns** `hits[]`: `scope`, `key`, `type`, `description`, `version`, `snippet`,
-`updated_at`.
+`updated_at`, `linked`.
 
 Project hits always precede global ones regardless of the order you asked for
 them, because a fact recorded about *this* repository beats a general one.
@@ -280,6 +280,11 @@ hit and never folded into the ranking, and there are deliberately **no time
 filters here** — a filter interacting with the 20-hit cap would truncate
 differently than you expect, dropping matches you would have wanted to see. Use
 `memory_list` when you want to select by time.
+
+`linked` is always present — an empty array when a hit has no associations, up
+to 4 neighbor stubs (`key`, `description`, `reason`, `linked_by`, `linked_at`)
+otherwise. It never affects bm25 order; it is a labeled second tier, pushed to
+you unconditionally so you do not have to ask. See [Links](#links).
 
 **Errors** — `wrong_state`, `invalid_input` (bad scope), `unsupported_search`.
 
@@ -294,7 +299,10 @@ differently than you expect, dropping matches you would have wanted to see. Use
 | | | State: **Opened** |
 
 **Returns** `found` (bool) and, when found, `memory`: `key`, `type`, `description`,
-`body`, `version`, `updated_by`, `created_at`, `updated_at`.
+`body`, `version`, `updated_by`, `created_at`, `updated_at`. Also `links[]`,
+always present — an empty array when there are none, up to 8 neighbors
+(`key`, `description`, `reason`, `linked_by`, `linked_at`), with `links_total`
+added when the list was truncated. See [Links](#links).
 
 A missing key is **not an error** — it is a normal answer, `{"found": false}`.
 
@@ -312,9 +320,14 @@ A missing key is **not an error** — it is a normal answer, `{"found": false}`.
 | `include_verification` | bool | no | project scope only; adds `verification` to each entry |
 | | | | State: **Opened** |
 
-**Returns** `entries[]`: `key`, `type`, `description`, `version`, `updated_at`, plus
-`evidence` and `verification` when asked for. See [Change evidence](#change-evidence)
-and [Verification](#verification).
+**Returns** `entries[]`: `key`, `type`, `description`, `version`, `updated_at`,
+`link_count`, plus `evidence` and `verification` when asked for. See
+[Change evidence](#change-evidence), [Verification](#verification), and
+[Links](#links).
+
+`link_count` is a structure signal only — no bodies, no reasons, just how many
+associations a memory has. A high count is worth a look with `memory_read`,
+not a verdict by itself.
 
 There is deliberately **no ordering by how stale or unverified something is**. No
 threshold, ranking or priority exists anywhere in this system — see the note at the
@@ -400,6 +413,75 @@ An evidence policy is **not copied**, and the source keeps its own. A policy is
 project-local observation configuration rather than part of what the memory
 asserts, and git evidence has no meaning in the global scope — there is no
 repository there to observe.
+
+Links are **not copied** either, for the same reason: they are same-scope
+associations (see [Links](#links)) between project memories, which have no
+meaning against a global copy. `note` says so when the source had any.
+
+## Links
+
+An association between two memories in the **same** scope: untyped, symmetric,
+and carrying a mandatory reason. Stigmergy stores only project-specialized
+bindings — facts about *this* codebase that your general knowledge cannot
+contain. Don't create a memory just to link general concepts to each other;
+link project artifacts, and let the reason supply the general-knowledge hop.
+
+### `memory_link`
+
+> Associate two memories in the same scope, with the reason the association matters. Links are shown to every agent that reads or finds either memory. Record project-specific connections your general knowledge cannot infer.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `scope` | string | yes | `project` or `global` — both keys are in this scope |
+| `key` | string | yes | |
+| `other_key` | string | yes | the memory to associate with `key` |
+| `reason` | string | yes | one line; the encoding context — never empty |
+| | | | State: **Registered** |
+
+**Returns** `link`: `key_a`, `key_b`, `reason`, `created_by`, `agent_kind`,
+`created_at`. The pair is stored in canonical order (`key_a < key_b`) regardless
+of which order you passed — linking A to B and B to A are the same call.
+
+There is no `expected_version` here: a link is cheap, attributed, and repairable
+by `memory_unlink`, so CAS would tax exactly the behavior worth encouraging.
+
+A memory may hold at most 16 links; the 17th is refused, naming the fan
+effect — a memory linked to everything primes nothing. Prune an existing link,
+or introduce an intermediate memory rather than turning one into a hub.
+
+A duplicate pair (either argument order) is refused with `cas_conflict`,
+carrying the existing edge under `current` — merge reasons with
+`memory_unlink` then `memory_link` rather than losing one silently.
+
+**Errors** — `wrong_state`; `invalid_input` (bad scope, bad key, self-link,
+empty or multi-line reason, either memory does not exist, fan-effect cap);
+`cas_conflict` (duplicate pair).
+
+### `memory_unlink`
+
+> Remove an association between two memories.
+
+| Parameter | Type | Required |
+|---|---|---|
+| `scope` | string | yes |
+| `key` | string | yes |
+| `other_key` | string | yes |
+| | | State: **Registered** |
+
+**Returns** `removed` (bool). An absent pair is **not an error** —
+`{"removed": false}` — unlinking something already gone is routine.
+
+**Errors** — `wrong_state`, `invalid_input` (bad scope or key).
+
+### Where links show up
+
+Links are **pushed, never pulled** — there is no `include_links` flag to set.
+Reading a memory, finding it in search, or listing the index all surface its
+associations unconditionally:
+
+- `memory_read` → `links[]` (§ above), always present.
+- `memory_search` → each hit's `linked[]` (§ above), always present.
+- `memory_list` → `link_count`, a number.
 
 ## Change evidence
 
@@ -538,9 +620,12 @@ mismatch, or a conflict on the global side), `invalid_input`.
 | `expected_version` | int | yes | a delete must never race an update you have not seen |
 | | | | State: **Registered** |
 
-**Returns** `deleted`, `key`, `version`. Hard delete. The audit record includes a
-hash of the body, so the log records *what* was destroyed, not merely that
-something was.
+**Returns** `deleted`, `key`, `version`, and — when the memory had any —
+`severed_links[]` (the other endpoints) with a `note` naming them. Hard
+delete. The audit record includes a hash of the body, so the log records
+*what* was destroyed, not merely that something was. Links are **severed**,
+never silently lost: the note says exactly which memories are no longer
+associated with this one.
 
 **Errors** — `wrong_state`, `invalid_input` (no such key), `cas_conflict`.
 

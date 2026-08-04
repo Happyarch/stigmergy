@@ -211,6 +211,36 @@ goes stale.
 `tokenize='porter unicode61'` gives stemming, so a search for "authenticate"
 finds "authentication". Ranking is bm25, with `snippet()` for the excerpt.
 
+### Links (both databases)
+
+```sql
+CREATE TABLE memory_links (    -- 0011 project / 0003 global
+  key_a      TEXT NOT NULL REFERENCES memories(key) ON DELETE CASCADE,
+  key_b      TEXT NOT NULL REFERENCES memories(key) ON DELETE CASCADE,
+  reason     TEXT NOT NULL,     -- mandatory; the encoding context
+  created_by TEXT NOT NULL,
+  agent_kind TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (key_a, key_b),
+  CHECK (key_a < key_b)
+);
+
+CREATE INDEX idx_memory_links_b ON memory_links(key_b);
+```
+
+An explicit, untyped, symmetric association between two memories in the same
+scope — see [docs/association-model.md](association-model.md) for the full
+design. `CHECK (key_a < key_b)` is total under the key grammar, which is what
+makes symmetry structural rather than something application code has to
+maintain: one row per pair, no self-links, and the primary key prefix and the
+extra index cover lookups from either endpoint. No CAS, no weights, no
+relation types — a link is cheap and attributed, and a wrong one is fixed by
+`memory_unlink` rather than negotiated. Links are same-scope only: the two
+databases cannot share a transaction or a foreign key (see `PromoteMemory`'s
+ordering comment below), and there is no cross-scope motivation once general
+knowledge is understood to live in the agent's weights rather than in a node
+here. `memories` and `memories_fts` are untouched by this table.
+
 ### Roots (project only)
 
 ```sql
@@ -709,7 +739,7 @@ fixable by whoever knows.
 | `paths` | absolute/relative → repo-relative POSIX; symlinks; worktree-escape | agents write files that *don't exist yet*, so it resolves the deepest existing ancestor and re-appends the missing tail |
 | `gitx` | worktree root + git common dir, pure Go, with a subprocess fallback | the hook path uses the pure-Go path only — shelling out to `git` on every edit would blow the latency budget |
 | `project` | which project governs a directory, and which of its repositories a path is in | resolution runs on the hook path, so it is filesystem-only by construction: one `gitx` walk and one small file read, no subprocess and no query |
-| `mcpserver` | the MCP server: session state machine, 26 tools, instructions | |
+| `mcpserver` | the MCP server: session state machine, 28 tools, instructions | |
 | `hooks` | the host hook protocols and the shared `Guard` fast path | Claude and Codex differ in *protocol*, not in *decision* — one guard, two renderings |
 | `hosts` | what each host can enforce, declared once along the axes that vary | the per-host copies of that text used to contradict each other; every rule an agent reads is now rendered from here |
 | `drift` | what has CHANGED in a memory's declared scope since a recorded commit | it measures change and never truth — keeping it out of `store` keeps that distinction structural (see memory-model.md) |

@@ -168,7 +168,7 @@ func TestReadListAndDelete(t *testing.T) {
 	}
 
 	// Delete is CAS-guarded: a stale version must not destroy data.
-	if _, err := db.DeleteMemory("alpha", 99, "r-test", "claude-code"); err == nil {
+	if _, _, err := db.DeleteMemory("alpha", 99, "r-test", "claude-code"); err == nil {
 		t.Fatal("delete with a stale version must conflict")
 	} else {
 		requireCode(t, err, serr.CASConflict)
@@ -177,17 +177,20 @@ func TestReadListAndDelete(t *testing.T) {
 		t.Fatalf("failed delete removed the entry anyway: %v", err)
 	}
 
-	deleted, err := db.DeleteMemory("alpha", 1, "r-test", "claude-code")
+	deleted, severed, err := db.DeleteMemory("alpha", 1, "r-test", "claude-code")
 	if err != nil {
 		t.Fatalf("DeleteMemory: %v", err)
 	}
 	if deleted.Body != "first body" {
 		t.Fatalf("DeleteMemory returned %#v, want the deleted entry", deleted)
 	}
+	if len(severed) != 0 {
+		t.Fatalf("DeleteMemory reported severed links %v for an unlinked memory", severed)
+	}
 	if _, err := db.ReadMemory("alpha"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("entry survived delete: %v", err)
 	}
-	if _, err := db.DeleteMemory("alpha", 1, "r-test", "claude-code"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := db.DeleteMemory("alpha", 1, "r-test", "claude-code"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete = %v, want ErrNotFound", err)
 	}
 

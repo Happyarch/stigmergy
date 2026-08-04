@@ -184,7 +184,7 @@ func TestVerificationCascadesWithTheMemory(t *testing.T) {
 	if _, err := record(t, db, VerificationRecord{ExpectedMemoryVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DeleteMemory("wire-format", 1, "r-test", "claude-code"); err != nil {
+	if _, _, err := db.DeleteMemory("wire-format", 1, "r-test", "claude-code"); err != nil {
 		t.Fatalf("DeleteMemory: %v", err)
 	}
 	var n int

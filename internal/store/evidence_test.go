@@ -345,7 +345,7 @@ func TestEvidenceCascades(t *testing.T) {
 	})
 
 	t.Run("deleting the memory takes everything", func(t *testing.T) {
-		if _, err := db.DeleteMemory("wire-format", 1, "r-test", "claude-code"); err != nil {
+		if _, _, err := db.DeleteMemory("wire-format", 1, "r-test", "claude-code"); err != nil {
 			t.Fatalf("DeleteMemory: %v", err)
 		}
 		for _, tbl := range []string{"memory_evidence_policy", "memory_evidence_member", "memory_evidence_path"} {

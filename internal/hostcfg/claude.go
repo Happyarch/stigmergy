@@ -30,7 +30,7 @@ const Binary = "stigmergy"
 // The name stays because it is already written into every installed
 // settings.json on every machine, and a rename would leave those pointing at a
 // subcommand that no longer exists.
-const RootGateTools = `mcp__stigmergy__(root_.*|memory_write|memory_promote|memory_delete|memory_evidence_set|memory_evidence_clear|memory_verify|claim_.*|mailbox_.*)`
+const RootGateTools = `mcp__stigmergy__(root_.*|memory_write|memory_promote|memory_delete|memory_evidence_set|memory_evidence_clear|memory_verify|memory_link|memory_unlink|claim_.*|mailbox_.*)`
 
 // EditTools is the matcher for the tools that write files.
 const EditTools = `Edit|Write|NotebookEdit`

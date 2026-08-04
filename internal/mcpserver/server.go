@@ -73,6 +73,17 @@ func New(version, globalPath string) (*mcp.Server, *Session) {
 	}, s.memoryPromote)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memory_link",
+		Description: "Associate two memories in the same scope, with the reason the association matters. Links are shown to every agent that reads or finds either memory. " +
+			"Record project-specific connections your general knowledge cannot infer.",
+	}, s.memoryLink)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "memory_unlink",
+		Description: "Remove an association between two memories.",
+	}, s.memoryUnlink)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memory_evidence_set",
 		Description: "Declare which repositories and paths to observe for changes when assessing a memory, and capture the commits to compare from. " +
 			"This records where to look; it is not a claim about what the memory means, and calling it verifies nothing.",

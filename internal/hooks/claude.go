@@ -196,6 +196,8 @@ var sessionOnly = map[string]string{
 	"memory_evidence_set":   "memories outlive you",
 	"memory_evidence_clear": "memories outlive you",
 	"memory_verify":         "memories outlive you",
+	"memory_link":           "memories outlive you",
+	"memory_unlink":         "memories outlive you",
 	"mailbox_send":          "a reply would arrive after you have finished",
 	"mailbox_inbox":         "a reply would arrive after you have finished",
 	"mailbox_threads":       "a reply would arrive after you have finished",

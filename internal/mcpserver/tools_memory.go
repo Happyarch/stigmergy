@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -22,9 +23,22 @@ type MemorySearchInput struct {
 	Scopes []string `json:"scopes,omitempty" jsonschema:"scopes to search: project, global, or both (default)"`
 }
 
+// SearchHitEntry is one search hit, carrying bounded neighbor stubs.
+//
+// store.SearchHit is embedded rather than copied, so the shape agents already
+// parse is unchanged — links are purely additive. Linked is never omitted:
+// an omitted field would be indistinguishable from "links were never asked
+// for", which does not apply here — they are pushed unconditionally (§5 of
+// docs/association-model.md), so an empty array means "this hit has none",
+// not "nobody asked".
+type SearchHitEntry struct {
+	store.SearchHit
+	Linked []store.Neighbor `json:"linked"`
+}
+
 // MemorySearchOutput lists hits, project scope first.
 type MemorySearchOutput struct {
-	Hits []store.SearchHit `json:"hits"`
+	Hits []SearchHitEntry `json:"hits"`
 }
 
 func (s *Session) memorySearch(_ context.Context, _ *mcp.CallToolRequest, in MemorySearchInput) (*mcp.CallToolResult, MemorySearchOutput, error) {
@@ -42,7 +56,48 @@ func (s *Session) memorySearch(_ context.Context, _ *mcp.CallToolRequest, in Mem
 		return nil, MemorySearchOutput{}, toolError(err)
 	}
 	s.touch()
-	return nil, MemorySearchOutput{Hits: hits}, nil
+
+	// One batched NeighborsOf per scope, not one per hit — the same reasoning
+	// as EvidencePolicies: an opt-in nobody can afford to set is the same as
+	// not having it, and push-not-pull exposure has to stay affordable.
+	var projectKeys, globalKeys []string
+	for _, h := range hits {
+		if h.Scope == string(store.Project) {
+			projectKeys = append(projectKeys, h.Key)
+		} else {
+			globalKeys = append(globalKeys, h.Key)
+		}
+	}
+	var projectNeighbors, globalNeighbors map[string][]store.Neighbor
+	if len(projectKeys) > 0 {
+		projectNeighbors, err = s.project.NeighborsOf(projectKeys)
+		if err != nil {
+			return nil, MemorySearchOutput{}, toolError(err)
+		}
+	}
+	if len(globalKeys) > 0 && s.global != nil {
+		globalNeighbors, err = s.global.NeighborsOf(globalKeys)
+		if err != nil {
+			return nil, MemorySearchOutput{}, toolError(err)
+		}
+	}
+
+	out := MemorySearchOutput{Hits: make([]SearchHitEntry, 0, len(hits))}
+	for _, h := range hits {
+		e := SearchHitEntry{SearchHit: h, Linked: []store.Neighbor{}}
+		neighbors := projectNeighbors
+		if h.Scope != string(store.Project) {
+			neighbors = globalNeighbors
+		}
+		if list := neighbors[h.Key]; len(list) > 0 {
+			if len(list) > store.MaxSearchNeighbors {
+				list = list[:store.MaxSearchNeighbors]
+			}
+			e.Linked = list
+		}
+		out.Hits = append(out.Hits, e)
+	}
+	return nil, out, nil
 }
 
 // MemoryReadInput reads one entry.
@@ -56,6 +111,15 @@ type MemoryReadInput struct {
 type MemoryReadOutput struct {
 	Found  bool          `json:"found"`
 	Memory *store.Memory `json:"memory,omitempty"`
+	// Links is always present when the memory is found — an empty array when
+	// there are none, never omitted. Omission would be indistinguishable from
+	// "links were never asked for", which cannot happen here: they are pushed
+	// unconditionally on every read (docs/association-model.md §5). No
+	// include_links flag exists, by design (Appendix A.7).
+	Links []store.Neighbor `json:"links"`
+	// LinksTotal is set only when the list above was truncated to
+	// store.MaxNeighborsSurfaced.
+	LinksTotal int `json:"links_total,omitempty"`
 }
 
 func (s *Session) memoryRead(_ context.Context, _ *mcp.CallToolRequest, in MemoryReadInput) (*mcp.CallToolResult, MemoryReadOutput, error) {
@@ -70,13 +134,25 @@ func (s *Session) memoryRead(_ context.Context, _ *mcp.CallToolRequest, in Memor
 	}
 	m, err := db.ReadMemory(in.Key)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, MemoryReadOutput{Found: false}, nil
+		return nil, MemoryReadOutput{Found: false, Links: []store.Neighbor{}}, nil
 	}
 	if err != nil {
 		return nil, MemoryReadOutput{}, toolError(err)
 	}
+	neighbors, err := db.NeighborsOf([]string{in.Key})
+	if err != nil {
+		return nil, MemoryReadOutput{}, toolError(err)
+	}
 	s.touch()
-	return nil, MemoryReadOutput{Found: true, Memory: m}, nil
+	out := MemoryReadOutput{Found: true, Memory: m, Links: []store.Neighbor{}}
+	if list := neighbors[in.Key]; len(list) > 0 {
+		if len(list) > store.MaxNeighborsSurfaced {
+			out.LinksTotal = len(list)
+			list = list[:store.MaxNeighborsSurfaced]
+		}
+		out.Links = list
+	}
+	return nil, out, nil
 }
 
 // MemoryListInput lists a scope's index.
@@ -111,6 +187,10 @@ type MemoryListEntry struct {
 	// concluded. Like Evidence it is always present when asked for, so "nobody
 	// has ever checked" is a value rather than a missing field.
 	Verification *store.VerificationSummary `json:"verification,omitempty"`
+	// LinkCount is a structure signal only — no bodies, no reasons, just how
+	// many associations this memory has. A high count is worth a look with
+	// memory_read, not a warning by itself.
+	LinkCount int `json:"link_count"`
 }
 
 // MemoryListOutput is bodyless on purpose: an index tells an agent what exists
@@ -148,14 +228,21 @@ func (s *Session) memoryList(ctx context.Context, _ *mcp.CallToolRequest, in Mem
 	for _, e := range entries {
 		out.Entries = append(out.Entries, MemoryListEntry{IndexEntry: e})
 	}
+	keys := make([]string, 0, len(entries))
+	for _, e := range entries {
+		keys = append(keys, e.Key)
+	}
+	if counts, err := db.LinkCounts(keys); err != nil {
+		return nil, MemoryListOutput{}, toolError(err)
+	} else {
+		for i := range out.Entries {
+			out.Entries[i].LinkCount = counts[out.Entries[i].Key]
+		}
+	}
 	if in.IncludeDrift {
 		policies, err := db.EvidencePolicies()
 		if err != nil {
 			return nil, MemoryListOutput{}, toolError(err)
-		}
-		keys := make([]string, 0, len(entries))
-		for _, e := range entries {
-			keys = append(keys, e.Key)
 		}
 		evidence := s.evaluateEvidence(ctx, policies, keys)
 		for i := range out.Entries {
@@ -296,10 +383,20 @@ func (s *Session) memoryPromote(_ context.Context, _ *mcp.CallToolRequest, in Me
 	// observation configuration and not part of what the memory asserts, so it
 	// stays on the source — and git evidence is undefined in the global scope
 	// anyway. The wording is "not copied", never "lost".
+	var notes []string
 	if s.project.HasEvidencePolicy(in.Key) {
-		out.Note = fmt.Sprintf(
+		notes = append(notes, fmt.Sprintf(
 			"Content promoted. Git evidence is project-only and was not copied; the source policy remains on project:%s.",
-			in.Key)
+			in.Key))
+	}
+	// Links are same-scope only (docs/association-model.md §1): a project link
+	// names project memories, so it has no meaning against the global copy.
+	if counts, err := s.project.LinkCounts([]string{in.Key}); err == nil && counts[in.Key] > 0 {
+		notes = append(notes,
+			"Links are project-local and were not copied; re-link the global copy against global memories if the associations hold there.")
+	}
+	if len(notes) > 0 {
+		out.Note = strings.Join(notes, " ")
 	}
 	return nil, out, nil
 }
@@ -316,6 +413,11 @@ type MemoryDeleteOutput struct {
 	Deleted bool   `json:"deleted"`
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	// SeveredLinks names the memories this one was linked to, if any. They are
+	// severed, never lost: the memory that vanished is what stopped existing,
+	// not the fact that its neighbors were once associated with it.
+	SeveredLinks []string `json:"severed_links,omitempty"`
+	Note         string   `json:"note,omitempty"`
 }
 
 func (s *Session) memoryDelete(_ context.Context, _ *mcp.CallToolRequest, in MemoryDeleteInput) (*mcp.CallToolResult, MemoryDeleteOutput, error) {
@@ -328,7 +430,7 @@ func (s *Session) memoryDelete(_ context.Context, _ *mcp.CallToolRequest, in Mem
 	if err != nil {
 		return nil, MemoryDeleteOutput{}, toolError(err)
 	}
-	m, err := db.DeleteMemory(in.Key, in.ExpectedVersion, s.actor(), s.agentKind())
+	m, severed, err := db.DeleteMemory(in.Key, in.ExpectedVersion, s.actor(), s.agentKind())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, MemoryDeleteOutput{}, toolError(serr.E(serr.InvalidInput,
 			"memory %q does not exist in the %s scope", in.Key, in.Scope))
@@ -337,5 +439,11 @@ func (s *Session) memoryDelete(_ context.Context, _ *mcp.CallToolRequest, in Mem
 		return nil, MemoryDeleteOutput{}, toolError(err)
 	}
 	s.touch()
-	return nil, MemoryDeleteOutput{Deleted: true, Key: m.Key, Version: m.Version}, nil
+	out := MemoryDeleteOutput{Deleted: true, Key: m.Key, Version: m.Version}
+	if len(severed) > 0 {
+		out.SeveredLinks = severed
+		out.Note = fmt.Sprintf("%d link(s) to %q were severed, not lost: %s.",
+			len(severed), m.Key, strings.Join(severed, ", "))
+	}
+	return nil, out, nil
 }

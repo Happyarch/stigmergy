@@ -87,7 +87,7 @@ Seven hook entries:
 | `SessionStart` | — | `stigmergy hook session-start` |
 | `UserPromptSubmit` | — | `stigmergy hook mail-notify` |
 | `PreToolUse` | `Edit\|Write\|NotebookEdit` | `stigmergy hook claim-guard` |
-| `PreToolUse` | `mcp__stigmergy__(root_.*\|memory_write\|memory_promote\|memory_delete\|memory_evidence_set\|memory_evidence_clear\|memory_verify\|claim_.*\|mailbox_.*)` | `stigmergy hook root-gate` |
+| `PreToolUse` | `mcp__stigmergy__(root_.*\|memory_write\|memory_promote\|memory_delete\|memory_evidence_set\|memory_evidence_clear\|memory_verify\|memory_link\|memory_unlink\|claim_.*\|mailbox_.*)` | `stigmergy hook root-gate` |
 | `Stop` | — | `stigmergy hook mail-gate` |
 | `SubagentStop` | — | `stigmergy hook subagent-stop` |
 | `SessionEnd` | — | `stigmergy hook session-end` |

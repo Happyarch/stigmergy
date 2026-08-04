@@ -282,6 +282,7 @@ func TestSessionOnlyToolsRefuseMemoryAndMailButNeverClaims(t *testing.T) {
 	}
 	for _, tool := range []string{
 		"mcp__stigmergy__memory_write", "mcp__stigmergy__memory_delete",
+		"mcp__stigmergy__memory_link", "mcp__stigmergy__memory_unlink",
 		"mcp__stigmergy__mailbox_send", "mcp__stigmergy__root_register",
 	} {
 		why := SessionOnlyTool(tool)

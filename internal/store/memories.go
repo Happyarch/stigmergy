@@ -668,42 +668,54 @@ func casCheck(cur *Memory, expected *int, key string) error {
 // DeleteMemory hard-deletes an entry under CAS. The exact current version must
 // be named, so a delete can never race an unseen update. The audit row records
 // the body hash: enough to prove what vanished, without retaining it.
-func (d *DB) DeleteMemory(key string, expectedVersion int, actor, kind string) (*Memory, error) {
+//
+// The second return is the keys of every memory this one was linked to —
+// read inside this same transaction, before the FK cascade takes the rows
+// away, so a caller can report them as SEVERED rather than silently lost.
+func (d *DB) DeleteMemory(key string, expectedVersion int, actor, kind string) (*Memory, []string, error) {
 	if err := ValidateKey(key); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if actor == "" {
-		return nil, serr.E(serr.InvalidInput, "actor must be set")
+		return nil, nil, serr.E(serr.InvalidInput, "actor must be set")
 	}
 	tx, err := d.Begin()
 	if err != nil {
-		return nil, serr.Internalf(err, "failed to begin transaction")
+		return nil, nil, serr.Internalf(err, "failed to begin transaction")
 	}
 	defer tx.Rollback()
 
 	cur, err := readMemoryTx(tx, key)
 	if errors.Is(err, ErrNotFound) {
-		return nil, ErrNotFound
+		return nil, nil, ErrNotFound
 	} else if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := casCheck(cur, &expectedVersion, key); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	severed, err := severedNeighborKeysTx(tx, key)
+	if err != nil {
+		return nil, nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM memories WHERE key = ? AND version = ?`, key, expectedVersion); err != nil {
-		return nil, serr.Internalf(err, "failed to delete memory")
+		return nil, nil, serr.Internalf(err, "failed to delete memory")
+	}
+	detail := fmt.Sprintf("version=%d body_sha256=%s", cur.Version, BodyHash(cur.Body))
+	if len(severed) > 0 {
+		detail += fmt.Sprintf(" severed_links=%s", strings.Join(severed, ","))
 	}
 	if err := audit(tx, AuditEntry{
 		Actor: actor, AgentKind: kind, Action: "memory_delete",
 		Target: string(d.Kind) + ":" + key,
-		Detail: fmt.Sprintf("version=%d body_sha256=%s", cur.Version, BodyHash(cur.Body)),
+		Detail: detail,
 	}); err != nil {
-		return nil, serr.Internalf(err, "failed to write audit record")
+		return nil, nil, serr.Internalf(err, "failed to write audit record")
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, serr.Internalf(err, "failed to commit memory delete")
+		return nil, nil, serr.Internalf(err, "failed to commit memory delete")
 	}
-	return cur, nil
+	return cur, severed, nil
 }
 
 // Promote copies a project memory into the global scope. It is a copy, not a
