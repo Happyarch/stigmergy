@@ -89,6 +89,10 @@ table is the size of the calls in flight — normally zero.
 - audit records older than **90 days**
 - messages in **resolved or abandoned** threads older than **30 days**, and then any
   thread left empty
+- episodes older than **180 days** that are both **ungrounded** (nothing cites them
+  via `episode_memory`) and **unchained** (nothing corrects or continues them) — the
+  retention side of episodic memory ([architecture.md §Episodes](architecture.md)):
+  distilled-and-cited or chained history is never reclaimed, only the dead ends are
 
 What GC **never touches**, and must never touch:
 
@@ -98,6 +102,8 @@ What GC **never touches**, and must never touch:
 - **messages in threads that are still open.** An old message in an unsettled thread
   is precisely the context someone needs in order to settle it. Age is not the test;
   resolution is.
+- **episodes that ground a memory or sit in a correction/continuation chain**, no
+  matter their age — an episode only becomes eligible once nothing cites it.
 
 There is nothing to schedule. Run it when you feel like it, or never — the system
 works fine with an unpruned audit log; it just gets larger.

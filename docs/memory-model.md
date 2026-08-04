@@ -133,7 +133,7 @@ answerable only once verification outcomes exist to calibrate against.
 
 > Evidence collection never mutates memory content and never removes a memory.
 
-This preserves the commitment at `internal/store/gc.go:23` — memories are "the
+This preserves the commitment in `internal/store/gc.go`'s doc comment — memories are "the
 state of the system, not its history, and nothing but an explicit delete should
 ever remove them."
 

@@ -227,8 +227,10 @@ numbers drift, symbols do not.
 - **Instructions**: `internal/mcpserver/instructions.go` — the mandatory
   priority block must stay ≤512 chars (unit-test enforced); new text goes in
   `extended()` only.
-- **Migrations**: latest are `project/0010_caller_tickets.sql` and
-  `global/0002_known_projects.sql`. Every new migration must state its undo in
+- **Migrations**: latest were `project/0010_caller_tickets.sql` and
+  `global/0002_known_projects.sql` before this design's own Stages A–C added
+  `project/0011–0013` and `global/0003` (§8.1, §9.1, §10.1) — now the actual
+  latest. Every new migration must state its undo in
   `TestRestoringIndexesOnADatabaseThatAlreadyLostThem`
   (`internal/store/migrate_test.go`), and a migration failure fails every hook
   closed machine-wide until rebuild (see the

@@ -231,7 +231,7 @@ working. Exits non-zero if anything FAILs.
 
 | Flag | Meaning |
 |---|---|
-| `--gc` | also prune old audit records and resolved mail |
+| `--gc` | also prune old audit records, resolved mail, and stale episodes |
 
 ### `stigmergy import claude-memory`
 
