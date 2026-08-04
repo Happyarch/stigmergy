@@ -88,6 +88,18 @@ a rebuild silently takes the table's indexes with it, and that has cost us the r
 indexes once already. The migration replay test will also make you state how to undo
 your migration — add that line when you write it, not when the test goes red.
 
+A new MCP tool is a second, separate hazard the steps above do not cover: an already
+running `stigmergy mcp` process keeps serving whatever tool set it started with, even
+after you rebuild the binary and `doctor` migrates the database out from under it — it
+does not re-read `server.go`'s registration on its own. New tools only become callable
+once the host opens a fresh connection (restart the session, or however your host
+reconnects its MCP servers); that is not something a hook or a script can trigger for
+you. The reads and writes an old process already knew about keep working fine across
+the migration — the mismatch check on `internal/hooks/project.go`'s hook path is what
+fails closed on a version gap, not the MCP server's own tool calls — so this is a "new
+capability isn't there yet" surprise, not a broken one, but it is worth expecting
+before you go looking for why `memory_link` isn't in the list.
+
 ## Probing a host
 
 Every host's hook payloads are documented poorly, not at all, or wrongly. Do not
