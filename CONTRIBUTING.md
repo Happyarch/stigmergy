@@ -115,10 +115,13 @@ throwaway config. [docs/hosts.md](docs/hosts.md#probing-the-hosts) has both reci
 That method is how the agent identity fields were found — none of them are documented
 anywhere, and one of them the vendor's own docs deny exists.
 
-Record what you learn in [docs/VERIFY.md](docs/VERIFY.md), which tracks every
-assumption stigmergy makes about a host, how it was checked, and what is still open.
-"Confirmed" there means observed against the real thing; "harness-confirmed" means our
-side behaves correctly against a synthetic payload, which is a weaker claim and must
+Record what you learn in `docs/VERIFY.md`, which tracks every assumption stigmergy
+makes about a host, how it was checked, and what is still open. That file is a local
+working note rather than part of the repository — it is gitignored, alongside
+`docs/TODO.md` and `docs/plan.md`, so a fresh clone will not have one and starting it
+is not a mistake.
+"Confirmed" there means observed against the real thing; "harness-confirmed" means
+stigmergy's own side behaves correctly against a synthetic payload, which is a weaker claim and must
 stay distinguishable from the first.
 
 ## Tests
@@ -148,8 +151,13 @@ only makes sense with the source open beside it, it belongs in the source.
 - **mcp-tools.md** — the tool reference agents and integrators need.
 - **architecture.md** — the design and the reasons; this is the one written for
   contributors, and where naming internals is appropriate.
-- **operations.md**, **memory-model.md**, **deliberation.md**, **VERIFY.md** — running
-  it, what a memory is for, the deliberation subsystem, and the evidence log.
+- **operations.md**, **memory-model.md**, **association-model.md**,
+  **deliberation.md** — running it, what a memory is for, how memories reach each
+  other, and the deliberation subsystem.
+- **sync.md** / **sync-model.md** — carrying memories between one developer's own
+  machines, and the design behind it. The model document's §0 is a table of every
+  decision with the alternative it rejected; read it before proposing a transport, a
+  merge rule, or anything that would put a column on `memories`.
 
 If you change behaviour, change the document that describes it in the same commit.
 The failure mode here is specific and has bitten this project: three copies of the

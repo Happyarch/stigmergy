@@ -260,6 +260,21 @@ No parameters. State: **Registered** → drops back to **Opened**. Returns `root
 
 ## Memory
 
+**There is no sync tool, and that is deliberate.** Memories move between a
+developer's machines with `stigmergy sync`, a human CLI command
+([sync.md](sync.md)). No agent can trigger it, for three reasons worth knowing
+rather than rediscovering: a sync conflict is two of the user's own beliefs in
+disagreement and needs the user to settle it; an agent that can push can push the
+user's private memories to a remote on a model's say-so; and the operation is a
+multi-second network call with no cancellation story inside a tool call
+([sync-model.md](sync-model.md) §6.3).
+
+What this changes for an agent: nothing about how to write a memory, and one thing
+about how to read one. A memory may have arrived from the user's other machine, so
+`updated_by` can read `sync:<device>` rather than a root id, and `updated_at` can
+predate anything that happened in this database. Neither is a fault, and neither
+means the memory is stale.
+
 ### `memory_search`
 
 > Search shared memories. Do this before starting work and before writing a new memory. Project hits are listed before global ones.

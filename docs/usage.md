@@ -295,6 +295,22 @@ a bwrap overlay whose writes land in RAM, so your working tree is never touched 
 does not need to be clean. It is a separate subsystem with its own document —
 [deliberation.md](deliberation.md) — and is not part of the memory/claims loop above.
 
+### `stigmergy sync …`
+
+Carry your memories between your own machines. `enable` joins a project to the sync
+set, `export <dir>` writes this machine's memories to a directory, `import <dir>` reads
+another machine's export back in, `status` shows what is pending or contested, and
+`resolve <key>` settles a memory that changed on both machines.
+
+This is for **one developer's own machines**, not for a team. A project can have several
+developers with private memories, so nothing here ever travels through the project's
+repository — moving the exported directory is a separate, deliberate act.
+
+There is no transport yet: move the directory however you like, including with a file
+syncer. Move only the *exported directory* that way, never `stigmergy.sqlite3` itself —
+[operations.md](operations.md) explains why that corrupts databases. Full guide:
+[sync.md](sync.md).
+
 ### `stigmergy db path` / `stigmergy db migrate`
 
 Print the database paths, or create/migrate them. Debugging aids.

@@ -332,6 +332,21 @@ the delete — the only change this design makes to an existing write path.
   Never silently destroy beats converge.
 - A machine that sees a tombstone records it, so it can never re-emit the
   memory. That closes the loop.
+- **A key that is written again has its tombstone cleared**, in the same
+  transaction as the write. "Retained forever" governs how long a tombstone
+  survives the passage of time, not whether it survives its subject coming
+  back: a tombstone naming a live memory asserts something false. This is not
+  housekeeping, and it was found the hard way — the first implementation
+  omitted it. Because the tombstone rules above run BEFORE the base comparison
+  in §3.4, a stale tombstone shadows its own memory in both directions, and
+  says nothing either time. Against a machine still holding the old content the
+  plan reads delete-remote, destroying that machine's copy of a memory this one
+  has re-created. Against a machine that has never seen the key the plan reads
+  "nothing to do", so the re-created memory never syncs, on any run, ever.
+  Every write path clears, unconditionally rather than only on create, so an
+  ordinary write repairs a database that somehow acquired one. The merger
+  defends the same invariant from the other side: a live record beats a
+  same-side tombstone, for the hand-repaired database this rule cannot reach.
 - **Retention: forever.** A tombstone is a few dozen bytes and a laptop can be
   off for a year; `memory_verification`'s *"NOT PRUNED BY GC, deliberately"* is
   the precedent. `doctor --gc` reports the count and prunes nothing.
@@ -862,7 +877,7 @@ one-line unsynced nudge), `internal/cli/sync.go` (`sync clone`).
 
 ### Live verification
 
-[VERIFY.md](VERIFY.md)'s distinction applies. **Harness-confirmed** is two
+The project's standing distinction applies. **Harness-confirmed** is two
 databases in `t.TempDir()` and a local bare repository. **Confirmed** is two real
 machines, a real remote and a real week of use. The list to settle live:
 

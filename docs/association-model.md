@@ -315,6 +315,16 @@ target and the reason in detail.
 `DeleteLink`: absent pair returns `(false, nil)`, not an error; audit
 `memory_unlink` with the severed reason in detail.
 
+Both also maintain a sync tombstone, in the same transaction as the write they
+record (sync-model.md §3.7): `DeleteLink` writes one so the unlink reaches the
+developer's other machine instead of being undone by it, and `CreateLink` clears
+any tombstone for the pair, because a link that exists again is not a deleted one.
+`DeleteMemory` deliberately does **not** emit link tombstones for the edges its
+cascade severs — it reads `severedNeighborKeysTx` before deleting, so it knows
+exactly which those are, and the memory's own tombstone already carries them. Two
+tombstones for one delete would leave a link tombstone outliving any link it could
+describe.
+
 `NeighborsOf`: one batched query (`key_a IN (…) OR key_b IN (…)`) joined to
 `memories` for descriptions, assembled in Go (the `EvidencePolicies`
 precedent); timestamps canonicalised.

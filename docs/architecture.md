@@ -436,9 +436,58 @@ CREATE TABLE priming_delivered (   -- 0012; docs/association-model.md §9
   at      TEXT NOT NULL,
   PRIMARY KEY (root_id, key)
 );
+
+-- 0014 project / 0004 global; docs/sync-model.md §3.2, §3.7, §6.4.
+-- All four are satellites: nothing about sync is a column on `memories`,
+-- because the FTS triggers there enumerate columns literally (§4.2).
+
+CREATE TABLE memory_sync_base (    -- the content both machines last agreed on
+  key       TEXT PRIMARY KEY REFERENCES memories(key) ON DELETE CASCADE,
+  digest    TEXT NOT NULL,         -- sha256 over key, type, description, body
+  device_id TEXT NOT NULL,
+  at        TEXT NOT NULL
+);
+
+CREATE TABLE sync_tombstone (      -- what was deleted, so a delete propagates
+  kind      TEXT NOT NULL CHECK (kind IN ('memory','link')),
+  ident     TEXT NOT NULL,         -- the key, or "<key_a> <key_b>"
+  digest    TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  PRIMARY KEY (kind, ident)
+);
+
+CREATE TABLE sync_policy (         -- per-key override; the DEFAULT differs by scope
+  key  TEXT PRIMARY KEY REFERENCES memories(key) ON DELETE CASCADE,
+  mode TEXT NOT NULL CHECK (mode IN ('include','exclude')),
+  at   TEXT NOT NULL
+);
 ```
 
 `idx_audit_at` exists for GC, which deletes by age.
+
+**The sync tables.** `memory_sync_base` is what makes divergence detectable: with a
+recorded base, "both machines changed this" is distinguishable from "only one did",
+which is the whole reason `version` never has to travel (sync-model.md §3.1).
+
+`sync_tombstone` carries no foreign key, and cannot: it exists precisely because the
+row it names does not. It is also the one table here whose absence would be silently
+wrong rather than loudly broken — with no tombstone, a delete on one machine is
+indistinguishable from a create on the other, so every deleted memory returns on the
+next sync. The mirror of that rule is less obvious and is enforced in the write paths:
+a key that is written again has its tombstone **cleared**, because a tombstone naming a
+live memory shadows it in both directions and says nothing while it does.
+
+`sync_policy` has identical DDL in both scopes and opposite defaults — project
+memories sync unless excluded, global memories sync only when included. A global
+memory may be about *this physical box*, and only a human knows which; the rule is
+deliberately not derived from `type`, which is an enum nothing branches on
+(memory-model.md §8).
+
+`link_sync_base` is created by the same migration and is not yet read by anything. It
+is the link-side counterpart reserved for the stage that merges link reasons rather
+than merely their existence; the migration says so rather than leaving a future reader
+to wonder.
 
 `priming_delivered` is dedup for the end-of-turn priming nudge, not a
 mailbox: it rides the same Stop hook as mail (`stigmergy hook mail-gate`) so
@@ -811,6 +860,7 @@ fixable by whoever knows.
 | `deliberate` | the adversarial specification pipeline and its bwrap sandbox | a separate subsystem that merely *uses* stigmergy; nothing in the memory/claims path may depend on it |
 | `hostcfg` | writing/removing host config, idempotently, without clobbering | merging into someone else's config file is fiddly and deserves its own tests |
 | `importer` | legacy Claude markdown memory import | |
+| `syncx` | the cross-machine wire format and the pure merge rules | the merger takes two exported views and a base and returns a plan, so every rule in sync-model.md §3.4 is testable with no database and no network — the same reason `claims` is separate. Named `syncx` because a package called `sync` would shadow the standard library's at every call site |
 | `explore` | the sandboxed `codex exec` explorer | |
 | `serr` | the closed set of protocol error codes | agents branch on these, so they are an API |
 | `xdg`, `ids`, `cli` | XDG paths; root id generation; cobra wiring | |

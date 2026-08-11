@@ -97,10 +97,12 @@ Run once per project, per machine:
 stigmergy sync enable
 ```
 
-This proposes a name for the project from a fingerprint over every root
-commit in its git history, and records it. Running the same command on
-another clone of the same repository proposes the same name, so in the
-ordinary case nothing has to be typed twice. Pass `--as <name>` to choose the
+This proposes a name for the project — a short prefix of a fingerprint taken
+over every root commit in its git history — and records both the name and the
+full fingerprint. Running the same command on another clone of the same
+repository proposes the same name, so in the ordinary case nothing has to be
+typed twice. The name is what identifies the project in the exported tree; the
+full fingerprint is what a mismatch would be detected against. Pass `--as <name>` to choose the
 name explicitly — required for a shallow clone (a fingerprint cannot be
 derived from one reliably) or a project spanning several repositories (a
 fingerprint over one member's history would not describe the whole project).

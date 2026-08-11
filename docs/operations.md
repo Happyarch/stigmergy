@@ -139,8 +139,22 @@ worth saying twice: `git push` does not share your memories with anyone, and `gi
 on another machine gets you an empty stigmergy.
 
 If a fact is true everywhere, `memory_promote` it into the global scope — but that
-is still per-machine. Syncing memories across machines is not something stigmergy
-does today.
+is still per-machine.
+
+**To carry memories to another machine, use `stigmergy sync`.** It is a deliberate
+act with its own command, not something `git push` does for you, and it is built for
+one developer's own machines rather than for a team: a project can have several
+developers with private memories, so nothing here ever travels through the project's
+repository. [sync.md](sync.md) is the guide; [sync-model.md](sync-model.md) is the
+design behind it.
+
+**Do not point Syncthing, Dropbox or `rsync` at `stigmergy.sqlite3` itself.** It is the
+obvious shortcut and it corrupts databases: journalling is WAL, so a file syncer copies
+the main database and its `-wal` and `-shm` companions at different moments and cannot
+copy them atomically. What lands is a database carrying a WAL that does not belong to
+it. The failure does not present as a sync failure either — it presents as the claim
+guard failing closed in a repository you are not standing in. `stigmergy sync` moves a
+directory of text files instead, which is safe to put in exactly those tools.
 
 ### Worktrees and clones
 
