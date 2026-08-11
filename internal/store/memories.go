@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/happyarch/stigmergy/internal/serr"
+	"github.com/happyarch/stigmergy/internal/syncx"
 )
 
 // ErrNotFound reports a missing memory. It is deliberately not a serr code:
@@ -638,6 +639,13 @@ func (d *DB) WriteMemory(w MemoryWrite, kind string) (*WriteResult, error) {
 		}}
 	}
 
+	// A memory that exists again is not a deleted one, whatever an earlier
+	// delete recorded. See clearSyncTombstoneTx for what a stale tombstone
+	// costs — it is silent in both directions.
+	if err := clearSyncTombstoneTx(tx, "memory", w.Key); err != nil {
+		return nil, err
+	}
+
 	action := "memory_update"
 	if res.Created {
 		action = "memory_create"
@@ -689,6 +697,17 @@ func (d *DB) DeleteMemory(key string, expectedVersion int, actor, kind string) (
 	if actor == "" {
 		return nil, nil, serr.E(serr.InvalidInput, "actor must be set")
 	}
+	// Resolved before the transaction opens, and deliberately so: LocalDeviceID
+	// reads and, on first use, writes meta through d.DB directly (the pool, not
+	// a transaction), and SetMaxOpenConns(1) means there is exactly one
+	// connection to hand out. Calling it once BEGIN IMMEDIATE below already
+	// holds that connection would not queue politely — it would deadlock, the
+	// transaction waiting on a statement that is itself waiting for the
+	// connection the transaction is holding.
+	deviceID, err := d.LocalDeviceID()
+	if err != nil {
+		return nil, nil, err
+	}
 	tx, err := d.Begin()
 	if err != nil {
 		return nil, nil, serr.Internalf(err, "failed to begin transaction")
@@ -710,6 +729,28 @@ func (d *DB) DeleteMemory(key string, expectedVersion int, actor, kind string) (
 	}
 	if _, err := tx.Exec(`DELETE FROM memories WHERE key = ? AND version = ?`, key, expectedVersion); err != nil {
 		return nil, nil, serr.Internalf(err, "failed to delete memory")
+	}
+	// docs/sync-model.md §3.7: a delete without a tombstone is indistinguishable
+	// from a create on another machine, so the next sync would resurrect
+	// exactly what was just removed. Written in the same transaction as the
+	// DELETE above, the only change this design makes to an existing write
+	// path. The memory_sync_base row for this key, if any, is gone already —
+	// its ON DELETE CASCADE fired in the statement above — which is the pair of
+	// states internal/syncx.Reconcile expects: a tombstone, and no base.
+	//
+	// No tombstone is written for the links severedNeighborKeysTx just read.
+	// DeleteMemory already knows every neighbor the FK cascade is about to
+	// take, and the memory's own tombstone covers them: a remote that still
+	// holds one of those links has both its endpoints disappear the moment it
+	// imports this memory's tombstone, which deletes the link locally there
+	// exactly as the cascade did here. A second tombstone per severed link
+	// would say the same thing twice.
+	if err := putSyncTombstoneTx(tx, syncx.Tombstone{
+		Kind: "memory", Ident: key,
+		Digest:   syncx.Digest(cur.Key, cur.Type, cur.Description, cur.Body),
+		DeviceID: deviceID, At: Now(),
+	}); err != nil {
+		return nil, nil, err
 	}
 	detail := fmt.Sprintf("version=%d body_sha256=%s", cur.Version, BodyHash(cur.Body))
 	if len(severed) > 0 {

@@ -107,7 +107,9 @@ worth the false positives it costs).
 A consequence worth stating outright, because it surprises people: the database is
 inside `.git/`. It is **not** committed, cloned, or pushed. Project memories are
 local to your machine. Sharing them across machines is a deliberate act, not a
-side effect of `git push`.
+side effect of `git push` — the act is `stigmergy sync`, and
+[sync.md](sync.md) is its guide ([sync-model.md](sync-model.md) is the design
+behind it).
 
 **A project may span several repositories.** A client and its service, with
 separate remotes, whose changes cross between them are one piece of work even

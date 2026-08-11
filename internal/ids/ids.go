@@ -39,3 +39,20 @@ func NewProjectID() string {
 	}
 	return "p-" + hex.EncodeToString(b[:])
 }
+
+// NewDeviceID returns an identifier like "d-3f2a9c81b4de7a05".
+//
+// Random, not a secret, same as NewRootID and NewProjectID: it only has to be
+// unique across a developer's own machines, never authenticate anything.
+// Deliberately not derived from hostname or MAC address — a hostname collides
+// and changes, and a derivation would make two machines cloned from one disk
+// image indistinguishable, which is exactly the case a restored-backup rollback
+// (docs/sync-model.md §7.5) has to be able to detect. Minted once and stored in
+// the global database's meta as sync_device_id.
+func NewDeviceID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("ids: system CSPRNG unavailable: " + err.Error())
+	}
+	return "d-" + hex.EncodeToString(b[:])
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/happyarch/stigmergy/internal/serr"
+	"github.com/happyarch/stigmergy/internal/syncx"
 )
 
 // The association web: an untyped, symmetric edge between two memories in the
@@ -137,6 +138,13 @@ func (d *DB) CreateLink(a, b, reason, actor, agentKind string) (Link, error) {
 	); err != nil {
 		return Link{}, serr.Internalf(err, "failed to create the link")
 	}
+
+	// The pair is linked again, so the tombstone from any earlier unlink no
+	// longer describes anything true. Same identity spelling as DeleteLink
+	// writes below.
+	if err := clearSyncTombstoneTx(tx, "link", keyA+" "+keyB); err != nil {
+		return Link{}, err
+	}
 	if err := audit(tx, AuditEntry{
 		Actor: actor, AgentKind: agentKind, Action: "memory_link",
 		Target: string(d.Kind) + ":" + keyA + "<->" + keyB,
@@ -167,6 +175,15 @@ func (d *DB) DeleteLink(a, b, actor, agentKind string) (bool, error) {
 		keyA, keyB = keyB, keyA
 	}
 
+	// Resolved before the transaction opens — see DeleteMemory's identical
+	// comment. LocalDeviceID touches d.DB's own connection pool, and
+	// SetMaxOpenConns(1) means calling it once a transaction already holds the
+	// only connection deadlocks rather than queues.
+	deviceID, err := d.LocalDeviceID()
+	if err != nil {
+		return false, err
+	}
+
 	tx, err := d.Begin()
 	if err != nil {
 		return false, serr.Internalf(err, "failed to begin transaction")
@@ -182,6 +199,23 @@ func (d *DB) DeleteLink(a, b, actor, agentKind string) (bool, error) {
 
 	if _, err := tx.Exec(`DELETE FROM memory_links WHERE key_a = ? AND key_b = ?`, keyA, keyB); err != nil {
 		return false, serr.Internalf(err, "failed to remove the link")
+	}
+	// docs/sync-model.md §3.7, same reasoning as DeleteMemory's tombstone: an
+	// unlink without one is indistinguishable from a link never having existed
+	// on another machine, so the next sync would recreate exactly what this
+	// unlink just removed. ident is "<key_a> <key_b>", space-joined — no space
+	// is legal in the key grammar, so the join cannot collide with a real
+	// memory key's tombstone (kind='memory' keeps the two kinds apart anyway).
+	// The digest is over the reason: it is the only content a link has, and
+	// Reconcile-shaped logic for links (a future stage) needs something to
+	// compare against a still-live remote copy the same way a memory
+	// tombstone's digest does.
+	if err := putSyncTombstoneTx(tx, syncx.Tombstone{
+		Kind: "link", Ident: keyA + " " + keyB,
+		Digest:   syncx.Digest(keyA, keyB, existing.Reason, ""),
+		DeviceID: deviceID, At: Now(),
+	}); err != nil {
+		return false, err
 	}
 	if err := audit(tx, AuditEntry{
 		Actor: actor, AgentKind: agentKind, Action: "memory_unlink",
@@ -239,6 +273,35 @@ func scanLinkTx(tx *sql.Tx, keyA, keyB string) (Link, error) {
 		return Link{}, err
 	}
 	return l, nil
+}
+
+// ListLinks returns every link in this scope, in the canonical (key_a, key_b)
+// order the schema already enforces. Nothing before Stage A needed the whole
+// set at once; the sync exporter does, to write links.jsonl (docs/sync-model.md
+// §5) in one pass rather than reconstructing it from per-key lookups.
+func (d *DB) ListLinks() ([]Link, error) {
+	rows, err := d.Query(
+		`SELECT key_a, key_b, reason, created_by, agent_kind, created_at
+		   FROM memory_links ORDER BY key_a, key_b`)
+	if err != nil {
+		return nil, serr.Internalf(err, "failed to list links")
+	}
+	defer rows.Close()
+	out := []Link{}
+	for rows.Next() {
+		var l Link
+		if err := rows.Scan(&l.KeyA, &l.KeyB, &l.Reason, &l.CreatedBy, &l.AgentKind, &l.CreatedAt); err != nil {
+			return nil, serr.Internalf(err, "failed to read a link")
+		}
+		if err := canonicalStamps(l.KeyA, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, serr.Internalf(err, "failed to list links")
+	}
+	return out, nil
 }
 
 // NeighborsOf batches a link lookup over many keys into one query, joined to

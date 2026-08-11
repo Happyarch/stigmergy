@@ -47,4 +47,5 @@ func init() {
 	rootCmd.AddCommand(newExploreCmd())
 	rootCmd.AddCommand(newDeliberateCmd())
 	rootCmd.AddCommand(newImportCmd())
+	rootCmd.AddCommand(newSyncCmd())
 }

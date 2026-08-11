@@ -80,6 +80,14 @@ func TestRestoringIndexesOnADatabaseThatAlreadyLostThem(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE repos`); err != nil {
 		t.Fatalf("undoing 0007 (table): %v", err)
 	}
+	// 0014 adds only new tables, so undoing it is four drops and no rebuild —
+	// which is the whole reason sync's state lives in satellite tables rather
+	// than in columns on memories.
+	for _, tbl := range []string{"sync_policy", "sync_tombstone", "link_sync_base", "memory_sync_base"} {
+		if _, err := db.Exec(`DROP TABLE ` + tbl); err != nil {
+			t.Fatalf("undoing 0014 (%s): %v", tbl, err)
+		}
+	}
 	for _, trig := range []string{"episodes_ai", "episodes_ad", "episodes_au"} {
 		if _, err := db.Exec(`DROP TRIGGER ` + trig); err != nil {
 			t.Fatalf("undoing 0013 (%s): %v", trig, err)
