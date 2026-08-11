@@ -54,7 +54,7 @@ var pathKeys = map[string]bool{
 // conflict, and reading only the first would let the rest through unnoticed.
 //
 // "Move to:" is the odd one out — it does not say "File:" — and it was missed
-// until opencode's copy of the apply_patch format made us read the grammar
+// until opencode's copy of the apply_patch format forced a re-reading of the grammar
 // again. A rename writes its destination as surely as a create does, so a claim
 // on the destination is a conflict; without this the halt never fired for it.
 // Both hosts share the format and both were affected.
@@ -75,7 +75,7 @@ func ExtractPaths(in *CodexInput) []string {
 // can find, by key name or by reading apply_patch headers out of any string.
 //
 // It is shared with opencode, whose tool arguments are a different shape but the
-// same problem: filePath lowercases to a key we already know, and its
+// same problem: filePath lowercases to a key this walker already handles, and its
 // apply_patch is the same format. One walker means one place for a path to be
 // missed, rather than one per host.
 func pathsIn(payload any) []string {

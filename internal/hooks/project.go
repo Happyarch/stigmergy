@@ -71,8 +71,8 @@ func resolveProject(cwd string, mode access) (*opened, *unavailable) {
 	}
 	if err != nil {
 		// A pointer file that exists and cannot be read is a different thing
-		// entirely: somebody stated this repository is part of a project, and we
-		// cannot tell which. That is corruption, not absence.
+		// entirely: somebody stated this repository is part of a project, and
+		// which one cannot be told. That is corruption, not absence.
 		return nil, &unavailable{"this repository's project could not be resolved", err}
 	}
 	if !proj.Adopted() {

@@ -49,7 +49,7 @@ const (
 //
 // The distinction is delivery versus enforcement. Every host delivers; only some
 // can refuse to let a turn end on an unread message. Where it cannot be
-// enforced we say so rather than implying a guarantee we do not have — an agent
+// enforced, stigmergy says so rather than implying a guarantee it cannot keep — an agent
 // that believes mail is guaranteed will not check for it.
 type Mail int
 
@@ -64,8 +64,8 @@ const (
 
 // Subagents is whether stigmergy can tell a subagent from a root.
 //
-// Only roots may claim, write memory or send mail. Where the host gives us no
-// way to identify a subagent we cannot enforce that, and the honest move is to
+// Only roots may claim, write memory or send mail. Where the host offers no
+// way to identify a subagent that cannot be enforced, and the honest move is to
 // ask the agent not to spawn one rather than to pretend the gate is working.
 type Subagents int
 

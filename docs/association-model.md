@@ -67,7 +67,7 @@ what was kept, what was cut, and why. The cuts are as load-bearing as the keeps.
 |---|---|---|
 | **Spreading activation** (Collins & Loftus 1975): retrieval follows associative links outward from cues | Search returns FTS hits **plus each hit's linked neighbors, labeled as neighbors**; reading a memory surfaces its neighbors | Real activation is weighted and decays with distance. No portable unit exists for edge strength (memory-model §11), so: unweighted edges, exactly one hop, a labeled second tier **never folded into bm25 order** (§12) |
 | **Encoding specificity** (Tulving): a cue retrieves a memory only when it matches the encoding context | Every edge carries a **mandatory free-text reason** — the context that makes the hop meaningful | A bare edge ("A relates to B") is useless to a future reader; the reason is the payload, not metadata |
-| **Fan effect** (ACT-R): the more associations a node has, the weaker each one's pull | Hard cap on links per memory; bounded surfacing caps; link inflation named as a failure mode in agent instructions | We do not model the effect quantitatively; we bound the structure so it cannot dominate context |
+| **Fan effect** (ACT-R): the more associations a node has, the weaker each one's pull | Hard cap on links per memory; bounded surfacing caps; link inflation named as a failure mode in agent instructions | The effect is not modelled quantitatively; the structure is bounded instead, so it cannot dominate context |
 | **Priming**: activating a concept lowers the retrieval threshold of its neighbors | The agent's *current activity* is a cue: touching file F primes memories whose evidence paths cover F, and one hop of their neighbors — delivered as an end-of-turn note | Only files the session actually claimed; once per (root, memory); bounded note size. Priming routes attention; it asserts nothing |
 | **Reconsolidation**: a retrieved memory becomes labile — retrieval is the moment of update | The priming note tells the agent to `memory_verify` what it confirmed and update or unlink what it invalidated | The web routes attention to the verification machinery that already exists (memory-model §16); nothing here records a verification implicitly (§7) |
 | **Testing effect**: re-encountering material is what strengthens memory; for an LLM, "remembering" literally means being in the context window | **Push, not pull**: links surface unconditionally on read and search (no opt-in flag); priming notes inline neighbor *descriptions*, not just keys; delivery rides the hook path that already makes mail unskippable | Exposure is bounded (descriptions, never bodies; capped counts) so push cannot become flooding |
@@ -104,7 +104,7 @@ Deliberate design cuts:
 - **No weights, no decay, no use-counters** (§2 filters).
 - **No CAS versions on link operations.** An edge is cheap, attributed, and
   repairable by unlink; demanding `expected_version` for both endpoints would
-  tax exactly the behavior we want more of. A duplicate link *is* rejected, and
+  tax exactly the behavior the design wants more of. A duplicate link *is* rejected, and
   the rejection carries the existing edge so the agent can merge reasons
   (unlink + relink) rather than silently losing either.
 - **Nothing machine-generated is ever stored.** The create-path `similar[]`
@@ -123,7 +123,7 @@ if the reasoning it records turns out wrong.
 
 - **Immutable.** No update tool exists, ever. A wrong episode is corrected by a
   **new** episode linked `corrects`; an investigation that resumes is linked
-  `continues`. What was believed stays written; what we now believe is a later
+  `continues`. What was believed stays written; what is believed now is a later
   record. (This is the episodic analogue of never inferring a verification from
   a write.)
 - **Successors always surface.** Anything that returns an episode returns its

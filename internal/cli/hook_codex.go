@@ -44,8 +44,8 @@ func newCodexSessionStartCmd() *cobra.Command {
 	}
 }
 
-// newCodexMailNotifyCmd delivers mail on Codex, at the two moments Codex gives
-// us that reliably reach the agent: the start of a turn, and after a tool call.
+// newCodexMailNotifyCmd delivers mail on Codex, at the two moments Codex offers
+// that reliably reach the agent: the start of a turn, and after a tool call.
 //
 // Codex has a Stop event, but it cannot be used for this. Its Stop output is
 // limited to continue/stopReason/systemMessage, and systemMessage is documented
@@ -56,7 +56,7 @@ func newCodexSessionStartCmd() *cobra.Command {
 // after each tool call, and the tool results carry the unread count as a backstop.
 //
 // Marking the mail delivered is therefore deliberate here and not merely
-// mechanical: these are the channels we can see land, so a message announced
+// mechanical: these are the channels observed to land, so a message announced
 // through them has genuinely been announced.
 func newCodexMailNotifyCmd() *cobra.Command {
 	return &cobra.Command{
@@ -102,9 +102,9 @@ func newCodexClaimWarnCmd() *cobra.Command {
 
 			d := hooks.Guard("codex", in.SessionID, in.CWD, hooks.ExtractPaths(in))
 			if d.Allow || len(d.Conflicts) == 0 {
-				// Allowed, or we could not tell. Fail open: a warning we cannot
-				// substantiate is noise, and we could not have blocked the
-				// write regardless.
+				// Allowed, or undecidable. Fail open: an unsubstantiated warning
+				// is noise, and this hook could not have blocked the write
+				// regardless.
 				return nil
 			}
 			return json.NewEncoder(os.Stdout).Encode(hooks.CodexWarning{

@@ -10,7 +10,7 @@ import (
 func setup(t *testing.T) string {
 	t.Helper()
 	// The temp dir itself may be a symlink (/tmp → /private/tmp and friends),
-	// so resolve it up front: the worktree we compare against must already be
+	// so resolve it up front: the worktree being compared against must already be
 	// in resolved form or every path looks like an escape.
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

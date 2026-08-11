@@ -36,8 +36,8 @@ type opencodeAdapter struct{}
 func (opencodeAdapter) Kind() string { return "opencode" }
 
 // StateDirs is opencode's data directory — its session store and logs. Bound rw
-// so a turn's own writes there succeed against the overlay, even though we never
-// resume from them.
+// so a turn's own writes there succeed against the overlay, even though the
+// driver never resumes from them.
 func (opencodeAdapter) StateDirs() []string {
 	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
 		return []string{filepath.Join(d, "opencode")}

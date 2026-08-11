@@ -7,7 +7,7 @@ import (
 
 // CommandPrefix identifies the hook entries stigmergy owns. Everything the
 // installer writes into a shared hooks array starts with it, so removal can be
-// exact: we take back what we put in, and nothing else.
+// exact: removal takes back what installation put in, and nothing else.
 const CommandPrefix = "stigmergy hook"
 
 // Binary is the command written into host configs. It is deliberately bare and
@@ -35,8 +35,8 @@ const RootGateTools = `mcp__stigmergy__(root_.*|memory_write|memory_promote|memo
 // EditTools is the matcher for the tools that write files.
 const EditTools = `Edit|Write|NotebookEdit`
 
-// AutoMemoryKey is Claude Code's own "auto memory" switch, which we turn off in
-// any project that adopts stigmergy.
+// AutoMemoryKey is Claude Code's own "auto memory" switch, which stigmergy turns
+// off in any project that adopts it.
 //
 // Auto memory is on by default and writes markdown to
 // ~/.claude/projects/<slug>/memory/. Left running alongside stigmergy it would be
@@ -84,7 +84,7 @@ func ClaudePaths(worktree string) (mcpJSON, settings, memory string) {
 // whatever is already there.
 //
 // It no longer writes a block into CLAUDE.md. The instructions an agent needs
-// now reach it two ways it cannot miss and we do not have to maintain: the
+// now reach it two ways it cannot miss and nobody has to maintain: the
 // shared rules ride the MCP server's initialize.instructions, which every host
 // surfaces to the model, and the host-specific facts are handed over by the
 // session-start hook, which is also the only thing that knows the session_label.
@@ -135,8 +135,8 @@ func RemoveClaude(worktree string) error {
 
 	if settings, err := ReadJSON(settingsPath); err == nil {
 		setClaudeHooks(settings, false)
-		// Take back only the value we wrote. If the user has since set it to
-		// true, that is their decision and not ours to revert; deleting the key
+		// Take back only the value the installer wrote. If the user has since set
+		// it to true, that is their decision to revert, not stigmergy's; deleting the key
 		// outright would silently re-enable auto memory for someone who had
 		// turned it off on purpose.
 		if v, ok := settings[AutoMemoryKey].(bool); ok && !v {
@@ -154,7 +154,7 @@ func RemoveClaude(worktree string) error {
 
 // setClaudeHooks rewrites stigmergy's hook entries, in place.
 //
-// It always strips our entries first, then re-adds them when installing. That
+// It always strips stigmergy's entries first, then re-adds them when installing. That
 // makes install idempotent and upgrades safe: an entry whose matcher or command
 // changed between versions is replaced rather than duplicated, and a stale one
 // that no longer exists is dropped instead of lingering forever.
@@ -193,9 +193,9 @@ func setClaudeHooks(settings Object, install bool) {
 	}
 }
 
-// isStigmergyEntry reports whether a hook entry is one of ours, by looking at
+// isStigmergyEntry reports whether a hook entry is stigmergy's, by looking at
 // the command it runs. Matching on the command — not on position, and not on a
-// marker we would have to store elsewhere — is what lets removal be exact even
+// marker that would have to be stored elsewhere — is what lets removal be exact even
 // if the user has reordered or reformatted the file.
 func isStigmergyEntry(entry any) bool {
 	obj, ok := entry.(map[string]any)

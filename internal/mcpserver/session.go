@@ -296,7 +296,7 @@ func (s *Session) actingRoot(req *mcp.CallToolRequest) *store.Root {
 	// the label is stable for the agent's whole life, so this mints one root the
 	// first time it calls and finds that same root every time after. Model is left
 	// empty for the same reason it is empty on a bootstrapped session root — the
-	// host tells us the harness, never the model — and the agent type is already
+	// host reports the harness, never the model — and the agent type is already
 	// legible in the label.
 	root, _, err := s.project.RegisterRoot(store.Registration{
 		RootID:       ids.NewRootID(),

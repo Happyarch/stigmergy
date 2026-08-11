@@ -204,8 +204,8 @@ func TestRemoveOpenCodeLeavesTheUsersConfigBehind(t *testing.T) {
 	}
 }
 
-// A plugin directory of the user's own must survive. Removal takes back what we
-// put there and nothing else.
+// A plugin directory of the user's own must survive. Removal takes back what
+// install put there and nothing else.
 func TestRemoveOpenCodeKeepsTheUsersOwnPlugins(t *testing.T) {
 	wt := t.TempDir()
 	mine := filepath.Join(OpenCodePluginDir(wt), "mine.js")

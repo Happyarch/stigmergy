@@ -38,8 +38,8 @@ func WriteMarkerBlock(path, content string) error {
 	return writeFileAtomic(path, []byte(out), 0o644)
 }
 
-// RemoveMarkerBlock takes our block back out, leaving the rest of the file
-// alone. A file that held nothing but our block is removed entirely.
+// RemoveMarkerBlock takes stigmergy's block back out, leaving the rest of the
+// file alone. A file that held nothing but that block is removed entirely.
 func RemoveMarkerBlock(path string) error {
 	existing, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -59,7 +59,7 @@ func RemoveMarkerBlock(path string) error {
 	return writeFileAtomic(path, []byte(rest+"\n"), 0o644)
 }
 
-// HasMarkerBlock reports whether a file already carries our block.
+// HasMarkerBlock reports whether a file already carries stigmergy's block.
 func HasMarkerBlock(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -69,7 +69,7 @@ func HasMarkerBlock(path string) bool {
 	return found
 }
 
-// splitBlock finds our block and returns what surrounds it. An unterminated
+// splitBlock finds stigmergy's block and returns what surrounds it. An unterminated
 // begin marker is treated as "not found", so a half-deleted block is left for a
 // human to look at rather than being silently swallowed along with whatever
 // followed it.

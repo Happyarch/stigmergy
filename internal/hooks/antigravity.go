@@ -274,7 +274,7 @@ type AntigravityInjectOutput struct {
 }
 
 // AntigravityInjectedStep is a single step injected before the model call.
-// We use ephemeralMessage exclusively: it is shown in context but does not
+// stigmergy uses ephemeralMessage exclusively: it is shown in context but does not
 // persist as a real turn, which keeps the conversation history clean.
 type AntigravityInjectedStep struct {
 	EphemeralMessage string `json:"ephemeralMessage,omitempty"`

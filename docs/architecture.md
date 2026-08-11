@@ -498,7 +498,7 @@ session's own root, since only the session's main thread ever sees a Stop
 hook.
 
 `notified_at` and `read_at` look redundant and are not. `notified_at` is *stigmergy's*
-record — we put this message in front of the agent — and `read_at` is the *agent's* —
+record — stigmergy put this message in front of the agent — and `read_at` is the *agent's* —
 it looked. Only the delivery hooks set the first; there is no tool for it, because an
 agent able to suppress its own notifications eventually would.
 
@@ -731,8 +731,8 @@ leads directly to:
 ### 5.7 Identity is advisory, and an unregistered session owns nothing
 
 `session_label` is the host's session id, supplied *by the model* when it calls
-`root_register`. A model could lie. We accept that, because we are not a security
-boundary (§1) and lying gains an honest participant nothing.
+`root_register`. A model could lie. That is accepted, because stigmergy is not a
+security boundary (§1) and lying gains an honest participant nothing.
 
 The consequence to understand: the claim guard resolves "who am I?" by looking up
 the session label. **If a session has not registered, `selfRoot` is empty, and
@@ -746,12 +746,12 @@ also the answer to the support question "why is the agent blocking its own edits
 
 The claim guard does not have "a" failure mode. It has two, pointing opposite ways:
 
-- **Unparseable hook payload → allow.** Our own parser broke, or the host changed
-  its schema. Blocking every edit in the user's repository because *we* have a bug
-  is far worse than the collision we are guarding against.
-- **Database unreadable / schema mismatch → deny** (on Claude). Here we know
-  stigmergy is meant to be active and we *cannot verify* claims. Allowing the edit
-  risks silently destroying another agent's work. So we refuse, and say so:
+- **Unparseable hook payload → allow.** Stigmergy's own parser broke, or the host
+  changed its schema. Blocking every edit in the user's repository over a bug in
+  *this* code is far worse than the collision the guard exists to prevent.
+- **Database unreadable / schema mismatch → deny** (on Claude). Here stigmergy is
+  known to be meant to be active, and claims *cannot be verified*. Allowing the edit
+  risks silently destroying another agent's work. So the guard refuses, and says so:
   the message states plainly that this is not a claim conflict and there is nobody
   to negotiate with — run `stigmergy doctor`.
 
@@ -877,7 +877,7 @@ and `TestResolveNeverSpawnsASubprocess` is what notices.
 Claude Code's `PreToolUse` hook can **deny** a tool call before it runs. Codex's
 cannot: it may only surface a `systemMessage`, and the edit proceeds regardless
 (returning `continue:false` there marks the hook as *failed* and the call goes
-ahead anyway). This is a property of the hosts, not a shortcut we took.
+ahead anyway). This is a property of the hosts, not a shortcut stigmergy took.
 
 So enforcement is genuinely different on each side:
 

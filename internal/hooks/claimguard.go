@@ -12,7 +12,7 @@ import (
 )
 
 // HookBusyTimeout is how long the hook waits for a database lock. It is far
-// below the server's timeout on purpose: the agent is blocked while we decide,
+// below the server's timeout on purpose: the agent is blocked while the guard decides,
 // so a contended database must surface as a fast failure, not a stall.
 const HookBusyTimeout = 250
 
@@ -43,8 +43,8 @@ func Guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
 
 func guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
 	if len(editPaths) == 0 {
-		// An unrecognized tool shape. We do not know what it writes, so we do
-		// not pretend to govern it.
+		// An unrecognized tool shape. What it writes is unknown, so the guard
+		// does not pretend to govern it.
 		return Decision{Allow: true}
 	}
 
@@ -61,7 +61,7 @@ func guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
 	db := p.DB
 	defer db.Close()
 
-	// Resolve who we are. An unregistered session has no root, so every claim
+	// Resolve who the caller is. An unregistered session has no root, so every claim
 	// is foreign to it — including, potentially, one it made in a previous
 	// life. That is the intended nudge: register, and your own claims stop
 	// blocking you.
@@ -103,7 +103,7 @@ func guard(agentKind, sessionLabel, cwd string, editPaths []string) Decision {
 			}
 		}
 		if member == nil {
-			continue // Outside every repository of this project: not ours to govern.
+			continue // Outside every repository of this project: not this project's to govern.
 		}
 		rel, err := paths.Normalize(member.WorktreeRoot, cwd, edit)
 		if errors.Is(err, paths.ErrOutsideWorktree) {
@@ -219,10 +219,10 @@ func absolutize(cwd, p string) (string, error) {
 	return filepath.Join(cwd, p), nil
 }
 
-// failClosed is the answer when we cannot tell whether a path is claimed.
+// failClosed is the answer when the guard cannot tell whether a path is claimed.
 //
 // Allowing would mean overwriting another agent's work whenever the database is
-// unavailable — precisely when things are already going wrong. So we block, and
+// unavailable — precisely when things are already going wrong. So it blocks, and
 // say plainly what to do about it: this is recoverable, and the agent must not
 // mistake it for a claim conflict to negotiate.
 func failClosed(what string, err error) Decision {
@@ -259,8 +259,8 @@ func ConflictDetail(conflicts []store.Claim) string {
 		// repositories "src/api is claimed" does not tell an agent enough to act
 		// on, and it names a path that exists in more than one of them.
 		fmt.Fprintf(&sb, "  %s is claimed by root %s", c.Qualified(), c.RootID)
-		// Who you are about to argue with, as specifically as we can say it:
-		// the harness, and the model behind it if it told us.
+		// Who the agent is about to argue with, as specifically as it can be put:
+		// the harness, and the model behind it where the host disclosed one.
 		switch {
 		case c.AgentKind != "" && c.OwnerModel != "":
 			fmt.Fprintf(&sb, " (%s, %s)", c.AgentKind, c.OwnerModel)

@@ -52,7 +52,7 @@ func TestAModelIsOptional(t *testing.T) {
 
 // A resume may carry a model the original registration did not — the host
 // restarts the MCP server mid-session, and the agent answers this time. It must
-// also not erase what an earlier session already told us by staying silent.
+// also not erase what an earlier session already reported by staying silent.
 func TestResumingKeepsTheLastModelItWasTold(t *testing.T) {
 	db := testProject(t)
 
@@ -74,7 +74,7 @@ func TestResumingKeepsTheLastModelItWasTold(t *testing.T) {
 		t.Errorf("a resume did not record the model: %q", resumed.Model)
 	}
 
-	// Resume again, silent. The answer we already have must survive.
+	// Resume again, silent. The answer already recorded must survive.
 	again, _, err := db.RegisterRoot(Registration{
 		RootID: "r-ignored-2", AgentKind: "claude-code", Worktree: "/wt", SessionLabel: "sess-3",
 	})

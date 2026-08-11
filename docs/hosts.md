@@ -110,8 +110,8 @@ advice, and advice is not a mechanism.
 already there; it just stops Claude reading or writing it, stranding anything you
 had. Run `stigmergy import claude-memory` first.
 
-`init --remove` deletes the key only if its value is still `false` — the value we
-wrote. If you have since set it to `true` yourself, that is your decision and
+`init --remove` deletes the key only if its value is still `false` — the value
+`init` wrote. If you have since set it to `true` yourself, that is your decision and
 removal leaves it alone.
 
 `doctor` FAILs when an adopted project still has auto memory enabled.
@@ -379,7 +379,7 @@ on it.
 
 Now nothing rests on it at all: the shared rules ride the MCP server's instructions and
 `PreInvocation` carries the registration text, as it always did. A file whose delivery
-we could never confirm is one less thing to keep true.
+could never be confirmed is one less thing to keep true.
 
 ---
 
@@ -437,7 +437,7 @@ plugin resolves it with `client.session.get`, caches it per session, and reports
 
 This is the gate Codex cannot have (nothing identifies a subagent) and Antigravity
 cannot have (a subagent is a separate conversation with no recorded parent). It is
-worth noticing that opencode gives it to us almost by accident, through a REST field
+worth noticing that opencode gives it up almost by accident, through a REST field
 rather than a hook payload.
 
 "Could not ask" is reported as such, not guessed at. If the plugin cannot reach the

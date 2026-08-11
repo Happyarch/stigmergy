@@ -66,7 +66,7 @@ func TestARootReturningFromSilenceKeepsTheClaimItJustTook(t *testing.T) {
 }
 
 // The nastier variant from the same report: a returning root's own STALE claims
-// are still visible to the overlap check, so it is handed "already ours" — a
+// are still visible to the overlap check, so it is handed "already yours" — a
 // claim the sweep is about to release — and never inserts a new one at all.
 func TestALapsedRootReacquiringItsOwnStaleClaimGetsALiveOne(t *testing.T) {
 	db := testProject(t)

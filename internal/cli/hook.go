@@ -68,7 +68,7 @@ func newMailGateCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "stigmergy: could not parse the hook payload: %v\n", err)
 				return nil
 			}
-			// The agent is only still running because we blocked it last time.
+			// The agent is only still running because this hook blocked it last time.
 			// Blocking again would trap it: it has been shown the mail and the
 			// note, and what it does about them is now its own business.
 			if in.StopHookActive {
@@ -146,10 +146,10 @@ func newClaimGuardCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			in, err := hooks.DecodeClaude(os.Stdin)
 			if err != nil {
-				// A payload we cannot parse is a stigmergy problem, not the
-				// agent's. Blocking every edit because our own parser broke
-				// would be worse than the risk we are guarding against, and
-				// the host tells us about it loudly on stderr.
+				// An unparseable payload is a stigmergy problem, not the
+				// agent's. Blocking every edit because stigmergy's own parser broke
+				// would be worse than the risk the guard exists to prevent, and
+				// the host reports it loudly on stderr.
 				fmt.Fprintf(os.Stderr, "stigmergy: could not parse the hook payload: %v\n", err)
 				return nil
 			}

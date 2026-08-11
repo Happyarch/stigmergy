@@ -297,8 +297,8 @@ func (d *DB) AcquireClaim(req ClaimRequest) (*Claim, error) {
 			continue
 		}
 		if c.RootID == req.RootID {
-			// Already ours: acquiring twice is not an error, it is the same
-			// promise. Hand back the claim we already hold.
+			// Already the caller's: acquiring twice is not an error, it is the
+			// same promise. Hand back the claim it already holds.
 			return &c, nil
 		}
 		// The owner's liveness is in the message, not just the payload: it is what

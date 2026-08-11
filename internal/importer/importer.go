@@ -144,8 +144,8 @@ func Parse(path string) (*Entry, error) {
 	memType := strings.ToLower(strings.TrimSpace(fm.Metadata.Type))
 	if !validTypes[memType] {
 		// An unrecognized type is not a reason to drop a memory. "reference" is
-		// the honest default: we know it is worth keeping, but not what kind of
-		// claim it makes.
+		// the honest default: it is plainly worth keeping, but what kind of
+		// claim it makes is unknown.
 		memType = "reference"
 	}
 

@@ -1,4 +1,4 @@
-// Package paths normalizes the file paths agents hand us into the one form
+// Package paths normalizes the file paths agents supply into the one form
 // claims are stored and compared in: repo-relative, POSIX, symlink-resolved.
 //
 // This is security-adjacent in effect if not in intent: if two spellings of the
@@ -16,13 +16,13 @@ import (
 )
 
 // ErrOutsideWorktree reports a path that resolves outside the repository.
-// Claims cannot govern it, so it is not an error to edit — just not our
-// business.
+// Claims cannot govern it, so it is not an error to edit — just none of
+// stigmergy's business.
 var ErrOutsideWorktree = errors.New("paths: path is outside the worktree")
 
 // Normalize turns any path an agent supplied into a repo-relative POSIX path.
 //
-// Relative paths are joined against cwd (the host tells us the agent's working
+// Relative paths are joined against cwd (the host reports the agent's working
 // directory). Symlinks are resolved, so /repo/link/f.go and /repo/real/f.go
 // cannot both be claimed independently.
 func Normalize(worktree, cwd, path string) (string, error) {

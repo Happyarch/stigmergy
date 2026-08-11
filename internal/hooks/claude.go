@@ -19,7 +19,7 @@ import (
 // ClaudeInput is the payload Claude Code writes to a hook's stdin.
 //
 // Raw is kept alongside the typed fields because the payload carries host
-// details we cannot pin down from the docs alone (see SubagentEvidence), and
+// details that cannot be pinned down from the docs alone (see SubagentEvidence), and
 // because `stigmergy hook dump` exists to capture exactly that.
 type ClaudeInput struct {
 	SessionID      string         `json:"session_id"`
@@ -59,7 +59,7 @@ func DecodeClaude(r io.Reader) (*ClaudeInput, error) {
 
 // EditedPaths returns the file paths a tool call is about to write.
 //
-// An empty result means "this call does not touch a file we recognize", which
+// An empty result means "this call does not touch a file stigmergy recognizes", which
 // callers must treat as allow: guessing at an unknown tool's arguments would
 // block edits stigmergy does not understand, and a coordination tool that
 // blocks unpredictably is worse than one that occasionally misses.

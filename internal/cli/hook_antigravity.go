@@ -36,9 +36,9 @@ func newAntigravityClaimGuardCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			in, err := hooks.DecodeAntigravityPreToolUse(os.Stdin)
 			if err != nil {
-				// A payload we cannot parse is a stigmergy problem, not the
-				// agent's. Blocking every edit because our own parser broke
-				// would be worse than the risk we are guarding against.
+				// An unparseable payload is a stigmergy problem, not the
+				// agent's. Blocking every edit because stigmergy's own parser broke
+				// would be worse than the risk the guard exists to prevent.
 				fmt.Fprintf(os.Stderr, "stigmergy: could not parse the hook payload: %v\n", err)
 				return nil
 			}

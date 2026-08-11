@@ -77,7 +77,7 @@ func (c codexAdapter) Turn(ctx context.Context, a *Agent, prompt string) (string
 		"--skip-git-repo-check",
 	)
 	// NOT --ephemeral. explore passes it deliberately to prevent session state;
-	// we need exactly the opposite from the same binary.
+	// deliberation needs exactly the opposite from the same binary.
 	args = append(args, "--", prompt)
 
 	stdout, err := runWrapped(ctx, a, c.StateDirs(), args)

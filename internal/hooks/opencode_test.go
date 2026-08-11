@@ -16,7 +16,7 @@ func decodeOC(t *testing.T, payload string) *OpenCodeInput {
 }
 
 // A real payload, as the plugin sends it. The tool payload here is the one the
-// probe captured from a live opencode session rather than one we invented, so
+// probe captured from a live opencode session rather than an invented one, so
 // the fields are the ones that actually arrive.
 func TestDecodingARealWritePayload(t *testing.T) {
 	in := decodeOC(t, `{

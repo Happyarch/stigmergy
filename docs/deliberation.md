@@ -229,8 +229,8 @@ Naming the flaw without designing the fix is the same rule as shift-left
 ([§3.4](#34-shift-left)), applied inside a single turn rather than across rounds.
 An Adversary that prescribes the fix has made the next Planner its typist.
 
-The Adversary used to issue the verdict itself, and that was a mistake we watched
-happen. A mind told to *attack* will always find something to say, and when the
+The Adversary used to issue the verdict itself, and that was a mistake caught in
+live runs. A mind told to *attack* will always find something to say, and when the
 same mind then scores its own findings, everything it said becomes grounds to
 fail. Real runs failed on nitpicks — a hardening no one asked for, a scenario the
 intent had ruled out — and the Planner spent whole rounds chasing ghosts. Finding
@@ -1105,8 +1105,8 @@ there.
   agent cannot leave notes for its future self outside the payload — but it is a
   real difference from a worktree that persisted across a slot's turns.
 - **Order is load-bearing.** bwrap applies operations in sequence and a later
-  mount masks an earlier one. `--tmpfs /tmp` must come before anything of ours
-  under `/tmp`, and a `--bind` that must survive must come *after* the overlay
+  mount masks an earlier one. `--tmpfs /tmp` must come before anything stigmergy
+  puts under `/tmp`, and a `--bind` that must survive must come *after* the overlay
   covering it. Both were real failures; both are pinned by tests, because neither
   is visible to a compiler and both fail conditionally.
 
@@ -1137,7 +1137,7 @@ Read [§9](#9-what-is-assumed) and count. Over the course of specifying this
 document the host layer was wrong five times, and every time it was wrong in the
 direction of *looking fine*:
 
-| we believed | reality |
+| what the docs promised | reality |
 |---|---|
 | `codex exec --ask-for-approval never` | flag does not exist; hard argument error |
 | opencode's `permission.ask` hook | documented, never implemented |

@@ -95,8 +95,8 @@ func RemoveAntigravity(worktree string) error {
 }
 
 // antigravityHooksJSON returns the complete hooks.json content for the plugin.
-// We own this file entirely (it lives inside our plugin directory), so there
-// is no merging logic — we write the whole thing.
+// stigmergy owns this file entirely (it lives inside stigmergy's own plugin
+// directory), so there is no merging logic — the installer writes the whole thing.
 func antigravityHooksJSON() string {
 	return `{
   "stigmergy-claim-guard": {

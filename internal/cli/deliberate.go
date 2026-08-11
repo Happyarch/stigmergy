@@ -184,7 +184,7 @@ func newDeliberateCmd() *cobra.Command {
 //
 // A previous deliberation's output is the exception worth naming: re-running to
 // improve a spec is the normal thing to want, and the header this command writes
-// is proof the file is ours to replace.
+// is proof the file is deliberate's own to replace.
 func checkOut(path string, force bool) error {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -200,7 +200,7 @@ func checkOut(path string, force bool) error {
 		return nil
 	}
 	if b, err := os.ReadFile(path); err == nil && strings.HasPrefix(string(b), "<!-- deliberated:") {
-		return nil // ours, from a previous run
+		return nil // written by deliberate, in a previous run
 	}
 	return fmt.Errorf("--out %s already exists and was not written by deliberate.\n"+
 		"The run would overwrite it at the end, after every agent turn has been spent.\n"+
@@ -338,7 +338,7 @@ func deliberationRepos(cwd, worktree string, only []string) ([]string, error) {
 	proj, err := project.ResolveWithFallback(cwd)
 	if err != nil || !proj.Adopted() {
 		// Not adopted: deliberation does not require stigmergy, so fall back to
-		// the repository we are standing in rather than refusing to run.
+		// the repository the command was run in rather than refusing to run.
 		if len(only) > 0 {
 			return nil, fmt.Errorf("--repo needs a stigmergy project; run `stigmergy init` first")
 		}

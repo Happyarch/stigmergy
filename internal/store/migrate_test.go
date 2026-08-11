@@ -202,7 +202,7 @@ func TestRegisterStillRefusesAnUnknownHost(t *testing.T) {
 // 0006 deliberately left agent_kind unconstrained in the schema, so that adding
 // a host is a Go edit rather than a table rebuild. If someone reintroduces a
 // CHECK here, the next host to be added will silently fail to register in the
-// field while passing every test that only exercises the hosts we already have —
+// field while passing every test that only exercises the hosts that already exist —
 // so say it out loud instead.
 func TestTheSchemaDoesNotConstrainAgentKind(t *testing.T) {
 	db := testProject(t)

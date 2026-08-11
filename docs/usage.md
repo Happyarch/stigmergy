@@ -9,6 +9,8 @@ what to do when something looks wrong.
 - [When a claim blocks you](#when-a-claim-blocks-you)
 - [CLI reference](#cli-reference)
 - [Troubleshooting](#troubleshooting)
+- [Several repositories, one project](#several-repositories-one-project)
+- [After upgrading stigmergy](#after-upgrading-stigmergy)
 
 ---
 
@@ -232,6 +234,32 @@ working. Exits non-zero if anything FAILs.
 | Flag | Meaning |
 |---|---|
 | `--gc` | also prune old audit records, resolved mail, and stale episodes |
+| `--all` | check and upgrade every project on this machine, not just this one |
+
+It checks the whole project, not the directory it was run from. In a project
+spanning several repositories, that means it resolves the shared database through
+the pointer in this repository's git common dir, lists every member with its
+worktree path, and marks which one you are standing in. Two things it can only
+report from that whole-project view:
+
+- **Host configuration is checked per member**, each line prefixed with the
+  repository it is about. This is the failure that hides: one member fully wired
+  and another with no hooks at all looks entirely healthy from inside the working
+  one, and the project coordinates in one direction only.
+- **A member whose worktree has gone missing is a FAIL.** Its claims can no longer
+  be resolved, so nothing can release them; the fix is
+  `stigmergy project remove <repo>`.
+
+A missing database is also treated more seriously in a multi-repository project.
+Elsewhere it just means stigmergy was never enabled, but a repository holding a
+pointer to a database that is not there has a claim guard that fails closed, so
+every edit in it is blocked until the database is restored or the pointer removed.
+
+`--all` is a different job: it walks the registry of known projects and opens each
+one read-write, which is what applies a pending schema migration. A project
+spanning several repositories appears there once, as the one database it has — so
+`--all` never performs the per-member wiring checks above. See
+[After upgrading stigmergy](#after-upgrading-stigmergy).
 
 ### `stigmergy import claude-memory`
 
@@ -436,6 +464,35 @@ stigmergy project list          every project on this machine
 stigmergy project add <path>    add a repository to the project you are in
 stigmergy project remove <r>    drop one; its claims are released
 ```
+
+### Where to start an agent session
+
+**Inside one of the member repositories** — never in a directory above them.
+
+A parent directory holding both of them is not a git repository, and stigmergy
+resolves a project by walking *up* from the working directory to the nearest
+`.git` and reading the pointer file it finds there. From a parent there is no
+`.git` to find, so there is no project, no database, and no coordination. Nor is
+the configuration there: `init` writes `.mcp.json`, `.claude/`, `.codex/` and
+`opencode.json` into each member's own worktree, so a host started a level up
+sees no MCP server and no hooks. Worse is a parent that happens to be a git
+repository itself, because then everything resolves — to a different project that
+has never been adopted, where the hooks correctly stay out of the way and nothing
+announces that the session is uncoordinated.
+
+Picking one member costs no reach. The claim guard resolves the *project* from the
+working directory, but decides which repository governs each edit from the edited
+file's own path, so a session started in `naviamp` can edit a file in
+`naviamp-sidecar` by absolute path and the claim is still scoped
+`naviamp-sidecar:…` — and still blocks an agent working from the other side.
+Memories, mail, roots and claims live in the one shared database whichever member
+the session began in. Start in whichever repository most of the work is, since
+that is what relative paths resolve against.
+
+Antigravity and opencode can hold several workspaces in one session, and the claim
+guard groups edits by the workspace each file came from. Where a host offers that,
+adding both repositories is a good fit for a project like this — but each added
+workspace must itself be a member repository, not the directory above them.
 
 ## After upgrading stigmergy
 

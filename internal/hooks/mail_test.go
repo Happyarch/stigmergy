@@ -204,7 +204,7 @@ func (f *fixture) sendTo(t *testing.T, subject, body string) {
 // text says so, by calling MarkDelivered afterwards.
 //
 // The old shape marked notified_at inside CheckMail, which put the record of
-// "we showed this to the agent" BEFORE the rendering and before the write to
+// "this was shown to the agent" BEFORE the rendering and before the write to
 // stdout. A host that closed the pipe, or a hook that died in between, consumed
 // the message without displaying it — and the sender then waits forever on a
 // reply to a message nothing will ever show, with no record anywhere of why.

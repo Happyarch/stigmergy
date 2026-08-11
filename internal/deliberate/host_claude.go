@@ -21,7 +21,7 @@ func (c claudeAdapter) Turn(ctx context.Context, a *Agent, prompt string) (strin
 	session := a.Session
 	args := []string{"claude", "-p"}
 	if session == "" {
-		// Claude is the only host that lets us pre-assign an id, which is the
+		// Claude is the only host that allows a pre-assigned id, which is the
 		// cleanest of the four: there is no window where a turn has run but the
 		// driver does not know how to get back to it, and nothing has to be
 		// parsed out of the output.
@@ -43,7 +43,7 @@ func (c claudeAdapter) Turn(ctx context.Context, a *Agent, prompt string) (strin
 	// bwrap makes this choice non-load-bearing (§6.4) — which is the point of
 	// putting the boundary in the kernel — but there is no reason to hand a
 	// worker a bigger hammer than the job needs.
-	// Every member repository, not just the one we chdir into. bwrap already
+	// Every member repository, not just the one the worker chdirs into. bwrap already
 	// overlays them all, but --add-dir is what decides which paths claude's own
 	// tools will touch — without it the worker is blocked by its own host from
 	// editing a sibling repository the sandbox is perfectly happy to let it write.

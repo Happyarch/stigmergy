@@ -22,7 +22,7 @@ const (
 // Message is one piece of mail between two roots.
 //
 // ReadAt and NotifiedAt answer different questions. NotifiedAt is stigmergy's:
-// did we ever put this in front of the recipient? ReadAt is the recipient's: did
+// was this ever put in front of the recipient? ReadAt is the recipient's: did
 // it look? Keeping them apart is what lets mail be delivered rather than merely
 // left lying about — see the 0002 migration.
 type Message struct {

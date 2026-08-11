@@ -137,7 +137,7 @@ func TestDriftOnAMemoryWithNoPolicyIsStillReported(t *testing.T) {
 		t.Fatalf("evidence = %#v", ev)
 	}
 	// Coverage is meaningless without a policy, and saying "unavailable" here
-	// would read as "we tried and failed".
+	// would read as "the check ran and failed".
 	if _, present := ev["coverage"]; present {
 		t.Errorf("coverage was reported for a memory with no policy: %#v", ev)
 	}

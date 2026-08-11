@@ -11,7 +11,7 @@ import (
 
 // Real git, real commits, no exec mocking — the same standard internal/gitx and
 // internal/hooks already hold themselves to. Everything asserted here is
-// documented git behaviour, and a mock would only assert what we assumed it was.
+// documented git behaviour, and a mock would only assert what it was assumed to be.
 
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()

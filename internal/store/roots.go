@@ -235,7 +235,7 @@ func (d *DB) RegisterRoot(reg Registration) (root *Root, resumed bool, err error
 			// A resuming session may report a model the first one did not, or a
 			// different one: the host can be restarted onto another model mid
 			// session. COALESCE keeps the last non-empty answer rather than
-			// letting a silent resume erase what an earlier one told us.
+			// letting a silent resume erase what an earlier one reported.
 			//
 			// worktree moves with the session rather than identifying it. A root
 			// is an agent, not a directory, so where it most recently said it was
@@ -455,7 +455,7 @@ func heartbeat(tx *sql.Tx, rootID string) error {
 	return nil
 }
 
-// mustParse is for stamps that came out of our own database, where an
+// mustParse is for stamps that came out of stigmergy's own database, where an
 // unparseable value is a bug rather than an input error. It reads as "now", so
 // the worst case is a silence reported as zero.
 func mustParse(stamp string) time.Time {

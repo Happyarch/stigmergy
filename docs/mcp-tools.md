@@ -92,7 +92,7 @@ code.
 | `not_owner` | that claim or thread is not yours to renew, release, or resolve |
 | `recipient_inactive` | the root you are writing to is gone, so it cannot answer |
 | `unsupported_search` | the search query could not be evaluated by FTS5 |
-| `internal` | a bug or an I/O failure on our side |
+| `internal` | a bug or an I/O failure on stigmergy's side |
 
 Every tool can return `internal`; it is not repeated in the per-tool lists below.
 
@@ -967,7 +967,7 @@ Two timestamps, deliberately distinct:
 
 | | whose record | set by |
 |---|---|---|
-| `notified_at` | stigmergy's: we put this in front of the agent | the delivery hooks, once per message |
+| `notified_at` | stigmergy's: it put this in front of the agent | the delivery hooks, once per message |
 | `read_at` | the agent's: it looked | `mailbox_mark_read` |
 
 Conflating them is what made the mailbox a pull channel with nothing pulling it: an

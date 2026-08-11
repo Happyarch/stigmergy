@@ -70,7 +70,7 @@ func (g antigravityAdapter) Turn(ctx context.Context, a *Agent, prompt string) (
 		if id := newConversation(before); id != "" {
 			session = id
 		}
-		// Still empty means agy left us no id to resume: the driver falls back
+		// Still empty means agy left no id to resume: the driver falls back
 		// to a full payload each turn, which works and merely costs a context
 		// rebuild.
 	}
@@ -92,9 +92,9 @@ func conversationIDs() map[string]bool {
 }
 
 // newConversation returns the id that appeared since the snapshot. If more than
-// one did — a human running agy at the same moment — we cannot tell which is
-// ours, so we take none and go sessionless rather than resume a stranger's
-// conversation.
+// one did — a human running agy at the same moment — there is no telling which
+// belongs to this run, so it takes none and goes sessionless rather than resume
+// a stranger's conversation.
 func newConversation(before map[string]bool) string {
 	var fresh []string
 	for id := range conversationIDs() {

@@ -19,7 +19,7 @@ import (
 // below is the same as everywhere else — decode, call the shared seam, encode —
 // with the plugin doing the translation.
 //
-// The difference from the other hosts is that these speak a payload we defined,
+// The difference from the other hosts is that these speak a payload stigmergy defined,
 // so there is nothing to guess. What was guessed, and then checked against a
 // live session, is in the opencode-plugin-contract memory.
 const openCodeKind = "opencode"
@@ -34,7 +34,7 @@ func newOpenCodeHookCmds() []*cobra.Command {
 
 // newOpenCodeClaimGuardCmd blocks an edit to a file another agent has claimed.
 //
-// This host can genuinely block. The plugin throws when we say deny, opencode
+// This host can genuinely block. The plugin throws on a deny, opencode
 // treats a throw from tool.execute.before as an unrecoverable defect, and the
 // tool never runs — the trigger is awaited before the tool executes and nothing
 // catches it. The reason reaches the model verbatim, so unlike Codex the agent
@@ -48,7 +48,7 @@ func newOpenCodeClaimGuardCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			in, err := hooks.DecodeOpenCode(os.Stdin)
 			if err != nil {
-				// Our parser breaking must not stop the user's work. Allow, and
+				// A break in stigmergy's own parser must not stop the user's work. Allow, and
 				// say so on stderr where opencode surfaces it.
 				fmt.Fprintf(os.Stderr, "stigmergy: could not parse the hook payload: %v\n", err)
 				return allowOpenCode()
@@ -73,10 +73,10 @@ func newOpenCodeClaimGuardCmd() *cobra.Command {
 // newOpenCodeRootGateCmd keeps subagents out of the tools only a root may call.
 //
 // This gate actually works here, which is worth saying because it does not on
-// two of the other hosts. Codex gives us nothing to identify a subagent, and an
+// two of the other hosts. Codex offers nothing that identifies a subagent, and an
 // Antigravity subagent is a separate conversation with no recorded parent — so
 // on both, the rule survives only because the agent keeps it. opencode records
-// a parentID on the session, and the plugin resolves it before calling us.
+// a parentID on the session, and the plugin resolves it before calling this hook.
 func newOpenCodeRootGateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "opencode-root-gate",
@@ -103,7 +103,7 @@ func newOpenCodeRootGateCmd() *cobra.Command {
 // newOpenCodeContextCmd hands the agent its registration details and its mail.
 //
 // It is the session-start hook and the mail notifier at once, because opencode
-// gives us one place that fires at the right moment: chat.message, once per real
+// offers one place that fires at the right moment: chat.message, once per real
 // user prompt. That is the UserPromptSubmit analogue, and it deliberately does
 // not fire for the internal title, summary or compaction agents.
 //

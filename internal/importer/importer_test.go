@@ -212,7 +212,7 @@ func TestImportHandlesBadFiles(t *testing.T) {
 	if report.Invalid != 2 {
 		t.Fatalf("invalid = %d, want 2 (the empty file and the one with no body)", report.Invalid)
 	}
-	// Malformed YAML must not cost us the prose underneath it.
+	// Malformed YAML must not cost the import the prose underneath it.
 	if _, err := db.ReadMemory("bad-yaml"); err != nil {
 		t.Errorf("a file with broken frontmatter but real content was dropped: %v", err)
 	}

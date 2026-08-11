@@ -1,6 +1,7 @@
 # stigmergy
 
-Shared memory and coordination for multiple AI agents working in one git repository.
+Shared memory and coordination for multiple AI agents working on one project — a
+single git repository, or several that belong together.
 
 Claude Code, Codex, Antigravity and opencode each keep their own memory, per host and
 per session. Run two of them on the same project and they diverge: they learn
@@ -20,10 +21,12 @@ hooks that make them look before they leap.
 
 ## What an agent gets
 
-**Memories** — durable notes in two scopes: *project* (in the repo's git directory,
-shared by every worktree and every agent on it) and *global* (machine-wide). Full-text
+**Memories** — durable notes in two scopes: *project* (shared by every worktree,
+every repository in the project, and every agent on them) and *global* (machine-wide). Full-text
 search, and compare-and-swap writes, so two agents editing one memory get a visible
-conflict instead of a silent overwrite.
+conflict instead of a silent overwrite. Both scopes live on this machine and travel
+with neither `git push` nor `git clone`; [`stigmergy sync`](docs/sync.md) carries them
+to your other machines, deliberately and by its own command.
 
 **Claims** — an agent reserves a file or a directory subtree before working on it,
 with a reason and a TTL. Another agent's edit inside that scope is then refused
@@ -72,25 +75,6 @@ alone.
 If you use Codex, trust the project when it prompts you — Codex loads project hooks
 only for trusted projects, and until then none of this takes effect there.
 
-## Documentation
-
-| | |
-|---|---|
-| [docs/usage.md](docs/usage.md) | install, enable, the daily loop, full CLI reference, troubleshooting |
-| [docs/architecture.md](docs/architecture.md) | the design and the reasons for it: schema, invariants, what a change must not break |
-| [docs/mcp-tools.md](docs/mcp-tools.md) | reference for all 26 MCP tools: parameters, returns, error codes |
-| [docs/hosts.md](docs/hosts.md) | what `init` writes, the hook contracts, and what each host can and cannot enforce |
-| [docs/operations.md](docs/operations.md) | TTLs, housekeeping, backup, removal, failure modes |
-| [docs/memory-model.md](docs/memory-model.md) | what a memory is for, and the change-evidence design: what it can and cannot tell you |
-| [docs/deliberation.md](docs/deliberation.md) | `stigmergy deliberate` — the adversarial specification pipeline, a separate subsystem |
-| [docs/VERIFY.md](docs/VERIFY.md) | every assumption made about a host, how it was checked, and what is still open |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | building, testing, the invariants a change must not break, and how to ship a schema change safely |
-
-
-## Licence
-
-LGPL-3.0-or-later. See [COPYING.LESSER](COPYING.LESSER) and [COPYING](COPYING).
-
 ## Several repositories, one project
 
 Most projects are one repository and need none of this. When several are one
@@ -113,6 +97,13 @@ stigmergy project add <path>    add a repository to the project you are in
 stigmergy project remove <r>    drop one; its claims are released
 ```
 
+Start agent sessions **inside one of the member repositories**, never in a
+directory above them — a parent is not a git repository and carries none of the
+host configuration, so nothing there is coordinated. Choosing one member costs no
+reach, because an edit is governed by the repository holding the file rather than
+by where the session began:
+[where to start an agent session](docs/usage.md#where-to-start-an-agent-session).
+
 ## After upgrading stigmergy
 
 ```
@@ -123,3 +114,24 @@ A new binary carrying a schema migration blocks edits in every adopted project
 until each database is upgraded — the claim guard fails closed when it cannot
 verify claims. `--all` upgrades every project this machine knows about in one
 pass. Run it immediately after installing.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/usage.md](docs/usage.md) | install, enable, the daily loop, full CLI reference, troubleshooting |
+| [docs/architecture.md](docs/architecture.md) | the design and the reasons for it: schema, invariants, what a change must not break |
+| [docs/mcp-tools.md](docs/mcp-tools.md) | reference for all 31 MCP tools: parameters, returns, error codes |
+| [docs/hosts.md](docs/hosts.md) | what `init` writes, the hook contracts, and what each host can and cannot enforce |
+| [docs/operations.md](docs/operations.md) | TTLs, housekeeping, backup, removal, failure modes |
+| [docs/memory-model.md](docs/memory-model.md) | what a memory is for, and the change-evidence design: what it can and cannot tell you |
+| [docs/association-model.md](docs/association-model.md) | links, priming and episodes: how memories reach each other, and why history is kept apart from state |
+| [docs/sync.md](docs/sync.md) | `stigmergy sync` — carrying your memories between your own machines |
+| [docs/sync-model.md](docs/sync-model.md) | the sync design: what travels and what must not, the merge rules, and every alternative rejected |
+| [docs/deliberation.md](docs/deliberation.md) | `stigmergy deliberate` — the adversarial specification pipeline, a separate subsystem |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | building, testing, the invariants a change must not break, and how to ship a schema change safely |
+
+
+## Licence
+
+LGPL-3.0-or-later. See [COPYING.LESSER](COPYING.LESSER) and [COPYING](COPYING).

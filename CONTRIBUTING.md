@@ -84,8 +84,8 @@ versions and says plainly that edits are blocked.
 
 Prefer a new table, a new column, or a convention that needs no schema change at all,
 over rebuilding an existing table. SQLite can only change a constraint by rebuilding,
-a rebuild silently takes the table's indexes with it, and that has cost us the roots
-indexes once already. The migration replay test will also make you state how to undo
+a rebuild silently takes the table's indexes with it, and that has cost this project
+the roots indexes once already. The migration replay test will also make you state how to undo
 your migration — add that line when you write it, not when the test goes red.
 
 A new MCP tool is a second, separate hazard the steps above do not cover: an already

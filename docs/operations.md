@@ -222,7 +222,7 @@ trustworthy, and every enforcement guarantee here rests on that locking.
 |---|---|---|---|
 | No project database (not adopted) | allow — stays out of the way | allow | allow |
 | Not a git repository | allow | allow | allow |
-| Unparseable hook payload | **allow** — our bug must not block the user's work | **allow** | allow |
+| Unparseable hook payload | **allow** — a stigmergy bug must not block the user's work | **allow** | allow |
 | stigmergy binary missing or crashed | allow (the hook never runs) | **allow** — the plugin turns every failure into a null | allow |
 | Database unreadable / schema mismatch | **deny**, and say to run `doctor` | **deny**, and say to run `doctor` | **silent** — see below |
 | Claim held by another root | **deny** | **deny** | warn, then halt the turn after the edit lands |

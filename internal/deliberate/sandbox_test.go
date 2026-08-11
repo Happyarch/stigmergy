@@ -23,7 +23,7 @@ func indexOfPair(args []string, flag, val string) int {
 // and one that silently unmounts its own workspace. Two rules, each learned the
 // hard way:
 //
-//   - --tmpfs /tmp must precede everything of ours, or it masks any path under
+//   - --tmpfs /tmp must precede every other /tmp mount, or it masks any path under
 //     /tmp. This was a real failure: "bwrap: Can't chdir to /tmp/…: No such file
 //     or directory", found only because one probe happened to put its workspace
 //     there.

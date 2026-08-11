@@ -7,14 +7,14 @@ import (
 	"github.com/happyarch/stigmergy/internal/hosts"
 )
 
-// opencode is the only host whose payload we design ourselves.
+// opencode is the only host whose payload stigmergy designs itself.
 //
-// The others hand us whatever their hook system emits, and the work is guessing
+// The others hand over whatever their hook system emits, and the work is guessing
 // what it means: Claude's session_id, Codex's tool_input, Antigravity's
 // conversationId, each documented poorly or not at all. opencode has no hook
 // system that can reach a subprocess — it has a plugin API, in TypeScript,
 // inside its own runtime — so stigmergy ships a small plugin that calls this
-// binary. Both ends of that wire are ours, which means the payload can say
+// binary. Both ends of that wire are stigmergy's, which means the payload can say
 // exactly what the Go side needs and nothing else.
 //
 // That is worth being deliberate about rather than mirroring opencode's
@@ -85,7 +85,7 @@ func (in *OpenCodeInput) CWD() string {
 //
 // Only a session known to have a parent counts. When the plugin could not ask,
 // this is false — the same asymmetry the Antigravity gate settled on, and for
-// the same reason: treating "we do not know" as "subagent" would block the real
+// the same reason: treating "unknown" as "subagent" would block the real
 // root from claiming or writing memory, which breaks the tool outright, while
 // the other way round costs a subagent that should not have registered.
 func (in *OpenCodeInput) IsSubagent() bool {

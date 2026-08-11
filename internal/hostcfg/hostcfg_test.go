@@ -76,7 +76,7 @@ func TestInstallClaudeDisablesAutoMemory(t *testing.T) {
 		t.Fatalf("%s = %#v, want false", AutoMemoryKey, settings[AutoMemoryKey])
 	}
 
-	// Removal takes back the value we wrote...
+	// Removal takes back the value the installer wrote...
 	if err := RemoveClaude(wt); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestInstallClaudeDisablesAutoMemory(t *testing.T) {
 
 	// ...but never reverts a user who turned auto memory off for their own
 	// reasons into having it back on. If they have set it to true themselves,
-	// that is their call and we leave it alone.
+	// that is their call and removal leaves it alone.
 	if err := InstallClaude(wt); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestInstallClaudeDisablesAutoMemory(t *testing.T) {
 	}
 }
 
-// The user's configuration was there first. Everything we do not own must
+// The user's configuration was there first. Everything stigmergy does not own must
 // survive install, uninstall, and reinstall untouched.
 func TestInstallClaudePreservesExistingConfig(t *testing.T) {
 	wt := t.TempDir()
@@ -160,7 +160,7 @@ func TestInstallClaudePreservesExistingConfig(t *testing.T) {
 		t.Error("install overwrote the user's CLAUDE.md content")
 	}
 
-	// Uninstall must give back exactly the file we found.
+	// Uninstall must give back exactly the file install found.
 	if err := RemoveClaude(wt); err != nil {
 		t.Fatalf("RemoveClaude: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestInstallClaudeIsIdempotent(t *testing.T) {
 	}
 }
 
-// A settings file we cannot parse is far more likely to be one the user is
+// An unparseable settings file is far more likely to be one the user is
 // midway through editing than garbage to discard.
 func TestInstallRefusesToOverwriteInvalidJSON(t *testing.T) {
 	wt := t.TempDir()
@@ -274,7 +274,7 @@ network_access = true   # needed for the proxy
 	}
 }
 
-// Another tool already configured under our name is not ours to overwrite.
+// Another tool already configured under stigmergy's name is not stigmergy's to overwrite.
 func TestInstallCodexRefusesAForeignServerEntry(t *testing.T) {
 	wt := t.TempDir()
 	configPath, _, _ := CodexPaths(wt)

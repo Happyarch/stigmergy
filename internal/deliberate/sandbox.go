@@ -46,11 +46,11 @@ type Sandbox struct {
 // The worker runs at the **real repository path** and may write anything,
 // anywhere. None of it is real: the repository and the home directory are
 // overlaid, so every write lands in an invisible tmpfs that dies with the
-// process. What survives is only what we bind back on top — the host's own state
+// process. What survives is only what the sandbox binds back on top — the host's own state
 // directory, without which session resume dies.
 //
 // This is the boundary. Not the hosts' permission flags — those handle "do not
-// ask", and they have been wrong about "do not reach" every time we checked:
+// ask", and they have been wrong about "do not reach" every time they were checked:
 // codex's --ask-for-approval does not exist, opencode's permission.ask was never
 // implemented, claude's bypassPermissions escapes its workspace outright, and agy
 // has no filesystem boundary at all. The kernel has not been wrong once.
@@ -77,7 +77,7 @@ func BwrapArgs(s Sandbox, cmd []string) []string {
 		"--ro-bind", "/", "/",
 		"--dev-bind", "/dev", "/dev",
 		"--proc", "/proc",
-		// A fresh writable /tmp, before anything of ours could live under it.
+		// A fresh writable /tmp, before anything of stigmergy's could live under it.
 		"--tmpfs", "/tmp",
 	}
 
@@ -89,7 +89,7 @@ func BwrapArgs(s Sandbox, cmd []string) []string {
 	//
 	// Why a file rather than argv: Linux caps a SINGLE argv element at
 	// MAX_ARG_STRLEN (32 pages = 131072 bytes), and the payload used to be one.
-	// It crosses two execve boundaries — we exec bwrap, bwrap execs the host — so
+	// It crosses two execve boundaries — the driver execs bwrap, bwrap execs the host — so
 	// a spec that grew past the cap killed the turn with E2BIG, and a failing run
 	// grows its spec every round, which means it marched into the wall exactly
 	// when it could least afford to. A bind has no size limit at all.

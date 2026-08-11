@@ -12,8 +12,9 @@ import (
 // TOML marker delimiters. Codex's config is TOML, and there is no round-trip
 // TOML encoder in the standard library that preserves comments, ordering and
 // formatting. Decoding and re-encoding the user's config would silently reflow
-// it and drop their comments — so we never do. We append a delimited block of
-// our own text and only ever rewrite the text between these markers.
+// it and drop their comments — so it never does. The installer appends a
+// delimited block of its own text and only ever rewrites the text between these
+// markers.
 const (
 	TOMLBeginMarker = "# >>> stigmergy managed block — do not edit; `stigmergy init` regenerates it >>>"
 	TOMLEndMarker   = "# <<< stigmergy managed block <<<"
@@ -41,7 +42,7 @@ tool_timeout_sec = 60.0
 use_memories = false
 `
 
-// foreignServer matches an [mcp_servers.stigmergy] table declared outside our
+// foreignServer matches an [mcp_servers.stigmergy] table declared outside the
 // managed block — someone else's configuration for the same server name.
 var foreignServer = regexp.MustCompile(`(?m)^\s*\[mcp_servers\.stigmergy\]`)
 
@@ -80,8 +81,8 @@ func RemoveCodex(worktree string) error {
 	return RemoveMarkerBlock(memoryPath)
 }
 
-// writeTOMLBlock appends or replaces our block, byte for byte leaving the rest
-// of the file as we found it.
+// writeTOMLBlock appends or replaces the managed block, byte for byte leaving
+// the rest of the file as it was found.
 func writeTOMLBlock(path, content string) error {
 	existing, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -91,9 +92,9 @@ func writeTOMLBlock(path, content string) error {
 
 	before, after, found := splitTOMLBlock(text)
 	if !found && foreignServer.MatchString(text) {
-		// Someone already configured an MCP server under our name, outside our
-		// block. Overwriting it could disconnect a server we know nothing
-		// about; there is no safe automatic answer, so stop and let a human
+		// Someone already configured an MCP server under stigmergy's name, outside
+		// the managed block. Overwriting it could disconnect a server nothing here
+		// knows about; there is no safe automatic answer, so stop and let a human
 		// decide.
 		return fmt.Errorf("%s already declares [mcp_servers.stigmergy] outside stigmergy's managed block — "+
 			"remove or rename it, then re-run `stigmergy init`", path)

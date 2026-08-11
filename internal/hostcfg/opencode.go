@@ -17,7 +17,7 @@ import (
 // a plugin API instead: TypeScript or JavaScript, loaded into opencode's own
 // runtime. So stigmergy ships a plugin, and the plugin shells out.
 //
-// That makes this the one host where we write code rather than configuration,
+// That makes this the one host where stigmergy ships code rather than configuration,
 // which deserves suspicion. Two things keep it small. The plugin holds no
 // policy: every decision is made by `stigmergy hook opencode-*` in Go, the same
 // as everywhere else, and the plugin only carries payloads to it and acts on the
@@ -87,7 +87,7 @@ func RemoveOpenCode(worktree string) error {
 				delete(cfg, "mcp")
 			}
 		}
-		// A file holding nothing but the schema line is one we created. Anything
+		// A file holding nothing but the schema line is one the installer created. Anything
 		// else is the user's and stays.
 		if len(cfg) == 0 || (len(cfg) == 1 && cfg["$schema"] != nil) {
 			_ = removeIfExists(configPath)
@@ -99,7 +99,7 @@ func RemoveOpenCode(worktree string) error {
 	if err := removeIfExists(pluginPath); err != nil {
 		return err
 	}
-	// Take the directories back only if we left them empty: a user with plugins
+	// Take the directories back only if removal left them empty: a user with plugins
 	// of their own keeps them.
 	_ = os.Remove(OpenCodePluginDir(worktree))
 	_ = os.Remove(filepath.Join(worktree, ".opencode"))
