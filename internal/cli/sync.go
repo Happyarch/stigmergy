@@ -220,7 +220,8 @@ func runSyncKnownProjects(out io.Writer, dir string, global *store.DB) error {
 	for _, known := range projects {
 		p, err := store.OpenProjectAt(known.DBPath, store.NoMigrate())
 		if err != nil {
-			return fmt.Errorf("project %q: %w", known.Label, err)
+			fmt.Fprintf(out, "project %q: skipped, database is gone (%s)\n", known.Label, known.DBPath)
+			continue
 		}
 		if err := refuseOnSchemaSkew(p, store.Project); err != nil {
 			p.Close()
