@@ -141,8 +141,9 @@ on another machine gets you an empty stigmergy.
 If a fact is true everywhere, `memory_promote` it into the global scope — but that
 is still per-machine.
 
-**To carry memories to another machine, use `stigmergy sync`.** It is a deliberate
-act with its own command, not something `git push` does for you, and it is built for
+**To carry memories to another machine, use `stigmergy sync`.** Run `stigmergy sync
+init --remote <private-url>` once, then run bare `stigmergy sync`; it is a deliberate
+act, not something a project `git push` does for you, and it is built for
 one developer's own machines rather than for a team: a project can have several
 developers with private memories, so nothing here ever travels through the project's
 repository. [sync.md](sync.md) is the guide; [sync-model.md](sync-model.md) is the
@@ -155,6 +156,11 @@ copy them atomically. What lands is a database carrying a WAL that does not belo
 it. The failure does not present as a sync failure either — it presents as the claim
 guard failing closed in a repository you are not standing in. `stigmergy sync` moves a
 directory of text files instead, which is safe to put in exactly those tools.
+
+The sync working copy is `$XDG_DATA_HOME/stigmergy/sync/` and is created with
+mode 0700. A configured remote that matches a project's `origin` is refused:
+the transport is for private memories, never project history. `dir:<path>` is
+available for an already-managed private directory.
 
 ### Worktrees and clones
 

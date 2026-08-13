@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/happyarch/stigmergy/internal/store"
+	"github.com/happyarch/stigmergy/internal/xdg"
 )
 
 // Two machines, one directory between them.
@@ -324,4 +328,185 @@ func treeBytes(t *testing.T, dir string) map[string]string {
 		t.Fatalf("walking the export tree: %v", err)
 	}
 	return out
+}
+
+// TestBareSyncUsesARealBareRepository covers the Stage B boundary without an
+// exec mock: setup, clone, commit, and push are all actual git operations.
+func TestBareSyncUsesARealBareRepository(t *testing.T) {
+	isolate(t)
+	path, err := xdg.GlobalDBPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := store.OpenGlobal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.WriteMemory(store.MemoryWrite{Key: "portable", Type: "project", Description: "portable", Body: "a workflow lesson", UpdatedBy: "r-test"}, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetSyncPolicy("portable", "include"); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(t.TempDir(), "project.sqlite3")
+	p, err := store.OpenProjectAt(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetMeta(store.MetaSyncProjectKey, "known-project"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetMeta(store.MetaSyncFingerprintKey, "test-fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.WriteMemory(store.MemoryWrite{Key: "project-memory", Type: "project", Description: "project", Body: "a project lesson", UpdatedBy: "r-test"}, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	if err := g.RememberProject(projectPath, "known project"); err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	bare := filepath.Join(t.TempDir(), "memories.git")
+	if b, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, b)
+	}
+	var out bytes.Buffer
+	if err := runSyncInit(&out, bare); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runSync(&out, false, false, true); err != nil {
+		t.Fatalf("bare sync: %v\n%s", err, out.String())
+	}
+	if b, err := exec.Command("git", "--git-dir", bare, "show", "main:global/memories/portable.md").CombinedOutput(); err != nil {
+		t.Fatalf("pushed tree has no memory: %v\n%s", err, b)
+	}
+	if b, err := exec.Command("git", "--git-dir", bare, "show", "main:projects/known-project/memories/project-memory.md").CombinedOutput(); err != nil {
+		t.Fatalf("bare sync missed an enabled known project: %v\n%s", err, b)
+	}
+}
+
+func TestBareSyncDirectoryTransportWritesTheSameTree(t *testing.T) {
+	isolate(t)
+	path, err := xdg.GlobalDBPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := store.OpenGlobal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.WriteMemory(store.MemoryWrite{Key: "portable", Type: "project", Description: "portable", Body: "a workflow lesson", UpdatedBy: "r-test"}, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetSyncPolicy("portable", "include"); err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	dir := filepath.Join(t.TempDir(), "shared")
+	var out bytes.Buffer
+	if err := runSyncInit(&out, "dir:"+dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSync(&out, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "global", "memories", "portable.md")); err != nil {
+		t.Fatalf("directory transport did not export the memory: %v", err)
+	}
+}
+
+func TestBareSyncRetriesANonFastForwardPush(t *testing.T) {
+	isolate(t)
+	path := mustGlobalPath(t)
+	g, err := store.OpenGlobal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.WriteMemory(store.MemoryWrite{Key: "first", Type: "project", Description: "first", Body: "first body", UpdatedBy: "r-test"}, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetSyncPolicy("first", "include"); err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	bare := filepath.Join(t.TempDir(), "memories.git")
+	if b, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, b)
+	}
+	var out bytes.Buffer
+	if err := runSyncInit(&out, bare); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSync(&out, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+
+	other := filepath.Join(t.TempDir(), "other")
+	if b, err := exec.Command("git", "clone", bare, other).CombinedOutput(); err != nil {
+		t.Fatalf("git clone: %v\n%s", err, b)
+	}
+	if b, err := exec.Command("git", "-C", other, "checkout", "-b", "main", "origin/main").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout main: %v\n%s", err, b)
+	}
+	if err := os.WriteFile(filepath.Join(other, "other"), []byte("other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"-C", other, "add", "other"}, {"-C", other, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-m", "other"}, {"-C", other, "push", "origin", "HEAD:main"}} {
+		if b, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, b)
+		}
+	}
+	g, err = store.OpenGlobal(path, store.NoMigrate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.WriteMemory(store.MemoryWrite{Key: "second", Type: "project", Description: "second", Body: "second body", UpdatedBy: "r-test"}, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetSyncPolicy("second", "include"); err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	if err := runSync(&out, false, false, false); err != nil {
+		t.Fatalf("retrying sync: %v\n%s", err, out.String())
+	}
+	t.Log(out.String())
+	if b, err := exec.Command("git", "--git-dir", bare, "show", "main:global/memories/second.md").CombinedOutput(); err != nil {
+		t.Fatalf("retry did not push local memory: %v\n%s", err, b)
+	}
+}
+
+func TestRollbackIsRefused(t *testing.T) {
+	isolate(t)
+	db, err := store.OpenGlobal(mustGlobalPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	id, err := db.LocalDeviceID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetMeta(store.MetaSyncSeqKey, "2"); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := writeDeviceSequence(dir, id, "other", 3); err != nil {
+		t.Fatal(err)
+	}
+	err = refuseRollback(dir, db, false)
+	if err == nil || !strings.Contains(err.Error(), "restored backup") || !strings.Contains(err.Error(), "cloned from one image") {
+		t.Fatalf("rollback refusal did not name both explanations: %v", err)
+	}
+}
+
+func mustGlobalPath(t *testing.T) string {
+	t.Helper()
+	p, err := xdg.GlobalDBPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

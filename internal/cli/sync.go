@@ -22,6 +22,7 @@ import (
 	"github.com/happyarch/stigmergy/internal/project"
 	"github.com/happyarch/stigmergy/internal/serr"
 	"github.com/happyarch/stigmergy/internal/store"
+	"github.com/happyarch/stigmergy/internal/syncgit"
 	"github.com/happyarch/stigmergy/internal/syncx"
 	"github.com/happyarch/stigmergy/internal/xdg"
 )
@@ -43,12 +44,18 @@ import (
 func newSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "Move memories between this developer's own machines (Stage A: export/import)",
-		Long: "Cross-machine memory sync, Stage A. There is no transport yet — `export` writes this\n" +
+		Short: "Move memories between this developer's own machines",
+		Long: "Cross-machine memory sync. `export` writes this\n" +
 			"machine's syncable memories to a plain directory, and `import` reads another machine's\n" +
 			"export back in. Move the directory between machines however you like (a USB stick, a\n" +
-			"Syncthing folder, a private git repository you drive by hand) — git-backed transport\n" +
-			"lands in a later stage. See docs/sync.md.",
+			"Syncthing folder, or a private git repository). `sync init --remote` configures the\n" +
+			"git or directory transport; bare `sync` runs it. See docs/sync.md.",
+	}
+	cmd.RunE = func(c *cobra.Command, _ []string) error {
+		dry, _ := c.Flags().GetBool("dry-run")
+		accept, _ := c.Flags().GetBool("accept-rollback")
+		confirm, _ := c.Flags().GetBool("confirm")
+		return runSync(c.OutOrStdout(), dry, accept, confirm)
 	}
 	cmd.AddCommand(newSyncExportCmd())
 	cmd.AddCommand(newSyncImportCmd())
@@ -57,7 +64,233 @@ func newSyncCmd() *cobra.Command {
 	cmd.AddCommand(newSyncShareCmd())
 	cmd.AddCommand(newSyncUnshareCmd())
 	cmd.AddCommand(newSyncResolveCmd())
+	cmd.AddCommand(newSyncInitCmd())
+	cmd.Flags().Bool("dry-run", false, "print the plan without changing a database or transport")
+	cmd.Flags().Bool("accept-rollback", false, "allow a restored device identity to push")
+	cmd.Flags().Bool("confirm", false, "confirm the first transmission of plaintext memories to this remote")
 	return cmd
+}
+
+func newSyncInitCmd() *cobra.Command {
+	var remote string
+	cmd := &cobra.Command{Use: "init --remote <git-url|dir:path>", Short: "Configure the private sync transport", SilenceUsage: true,
+		RunE: func(c *cobra.Command, _ []string) error { return runSyncInit(c.OutOrStdout(), remote) }}
+	cmd.Flags().StringVar(&remote, "remote", "", "private git remote or dir:path")
+	_ = cmd.MarkFlagRequired("remote")
+	return cmd
+}
+
+func runSyncInit(out io.Writer, remote string) error {
+	g, err := openSyncGlobal()
+	if err != nil {
+		return err
+	}
+	defer g.Close()
+	if strings.TrimSpace(remote) == "" {
+		return errors.New("--remote must not be empty")
+	}
+	if !strings.HasPrefix(remote, "dir:") {
+		if err := refuseOriginRemote(remote); err != nil {
+			return err
+		}
+	}
+	if err := g.SetMeta(store.MetaSyncRemoteKey, remote); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "sync transport configured: %s\n", remote)
+	return nil
+}
+
+// runSync performs the Stage B wrapper around Stage A's directory primitives.
+func runSync(out io.Writer, dryRun, acceptRollback, confirm bool) error {
+	g, err := openSyncGlobal()
+	if err != nil {
+		return err
+	}
+	defer g.Close()
+	remote := os.Getenv("STIGMERGY_SYNC_REMOTE")
+	if remote == "" {
+		remote = g.Meta(store.MetaSyncRemoteKey)
+	}
+	seq, _ := strconv.Atoi(g.Meta(store.MetaSyncSeqKey))
+	if seq == 0 && !dryRun && !confirm {
+		fmt.Fprintf(out, "first sync dry-run: %s will receive plaintext memories; review the remote and re-run with --confirm\n", remote)
+		return nil
+	}
+	if remote == "" {
+		return errors.New("sync has no remote — run `stigmergy sync init --remote …` first")
+	}
+	if !strings.HasPrefix(remote, "dir:") {
+		if err := refuseOriginRemote(remote); err != nil {
+			return err
+		}
+	}
+	dir, cleanup, err := syncWorkingTree(remote)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if !strings.HasPrefix(remote, "dir:") {
+		r := syncgit.Runner{Dir: dir}
+		_ = r.Fetch()
+	}
+	if dryRun {
+		fmt.Fprintf(out, "sync dry-run against %s\n", remote)
+		return nil
+	}
+	if err := refuseRollback(dir, g, acceptRollback); err != nil {
+		return err
+	}
+	if err := runSyncImport(out, dir); err != nil {
+		return err
+	}
+	if err := runSyncExport(out, dir); err != nil {
+		return err
+	}
+	if err := runSyncKnownProjects(out, dir, g); err != nil {
+		return err
+	}
+	device, err := g.LocalDeviceID()
+	if err != nil {
+		return err
+	}
+	seq++
+	if err := writeDeviceSequence(dir, device, deviceLabel(g), seq); err != nil {
+		return err
+	}
+	if err := g.SetMeta(store.MetaSyncSeqKey, strconv.Itoa(seq)); err != nil {
+		return err
+	}
+	if strings.HasPrefix(remote, "dir:") {
+		fmt.Fprintln(out, "sync complete (directory transport)")
+		return nil
+	}
+	r := syncgit.Runner{Dir: dir}
+	if err := r.AddAll(); err != nil {
+		return err
+	}
+	if err := r.Commit("stigmergy sync"); err != nil {
+		return err
+	}
+	if err := r.Push(); err != nil {
+		if fetchErr := r.Fetch(); fetchErr != nil {
+			return fmt.Errorf("sync push rejected and fetch failed: %w", fetchErr)
+		}
+		// The working copy is disposable transport state, so reset it to the
+		// fetched commit rather than asking git to merge memory bodies. Stage A
+		// then reconciles the two sides semantically and writes the retry commit.
+		if resetErr := r.Run("reset", "--hard", "origin/main"); resetErr != nil {
+			return fmt.Errorf("sync push rejected and transport reset failed: %w", resetErr)
+		}
+		if err := runSyncImport(out, dir); err != nil {
+			return err
+		}
+		if err := runSyncExport(out, dir); err != nil {
+			return err
+		}
+		if err := runSyncKnownProjects(out, dir, g); err != nil {
+			return err
+		}
+		if err := r.AddAll(); err != nil {
+			return err
+		}
+		if err := r.Commit("stigmergy sync retry"); err != nil {
+			return err
+		}
+		if err := r.Push(); err != nil {
+			return fmt.Errorf("sync push was rejected after one retry: %w", err)
+		}
+	}
+	fmt.Fprintln(out, "sync complete")
+	return nil
+}
+
+// runSyncKnownProjects gives bare sync the same machine-wide reach as doctor
+// --all. The current project was handled by Stage A's public primitives above;
+// repeating it here is harmless because import and export are idempotent.
+func runSyncKnownProjects(out io.Writer, dir string, global *store.DB) error {
+	projects, err := global.KnownProjects()
+	if err != nil {
+		return err
+	}
+	device, err := global.LocalDeviceID()
+	if err != nil {
+		return err
+	}
+	for _, known := range projects {
+		p, err := store.OpenProjectAt(known.DBPath, store.NoMigrate())
+		if err != nil {
+			return fmt.Errorf("project %q: %w", known.Label, err)
+		}
+		if err := refuseOnSchemaSkew(p, store.Project); err != nil {
+			p.Close()
+			return err
+		}
+		name := p.Meta(store.MetaSyncProjectKey)
+		if name == "" {
+			p.Close()
+			continue
+		}
+		pdir := filepath.Join(dir, "projects", name)
+		_, err = importScope(p, "project", pdir, deviceLabel(global))
+		if err == nil {
+			_, err = exportScope(pdir, p, device)
+		}
+		if err == nil {
+			err = writeProjectJSON(pdir, p)
+		}
+		p.Close()
+		if err != nil {
+			return fmt.Errorf("project %q: %w", name, err)
+		}
+		fmt.Fprintf(out, "project %q: synced\n", name)
+	}
+	return nil
+}
+
+func syncWorkingTree(remote string) (string, func(), error) {
+	if strings.HasPrefix(remote, "dir:") {
+		d := strings.TrimPrefix(remote, "dir:")
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return "", nil, err
+		}
+		return d, func() {}, nil
+	}
+	base := os.Getenv("STIGMERGY_SYNC_HOME")
+	if base == "" {
+		d, err := xdg.DataDir()
+		if err != nil {
+			return "", nil, err
+		}
+		base = filepath.Join(d, "sync")
+	}
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", nil, err
+	}
+	d := filepath.Join(base, "transport")
+	if _, err := os.Stat(filepath.Join(d, ".git")); errors.Is(err, os.ErrNotExist) {
+		if err := (syncgit.Runner{}).Clone(remote, d); err != nil {
+			return "", nil, err
+		}
+	}
+	return d, func() {}, nil
+}
+
+func refuseOriginRemote(remote string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	p, err := project.ResolveWithFallback(cwd)
+	if err != nil || !p.Adopted() {
+		return nil
+	}
+	r := syncgit.Runner{Dir: cwd}
+	origin, err := r.RemoteURL("origin")
+	if err == nil && origin == remote {
+		return fmt.Errorf("sync remote is this project's origin (%s); refusing to send private memories there", remote)
+	}
+	return nil
 }
 
 // syncAgentKind is the free-text agent_kind sync's own writes are attributed
@@ -1288,6 +1521,7 @@ func writeProjectJSON(dir string, db *store.DB) error {
 // read them.
 type wireDevice struct {
 	Label string `json:"label"`
+	Seq   int    `json:"seq,omitempty"`
 }
 
 func writeDeviceFile(dir, deviceID, label string) error {
@@ -1300,6 +1534,44 @@ func writeDeviceFile(dir, deviceID, label string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(devDir, deviceID+".json"), append(b, '\n'), 0o600)
+}
+
+func writeDeviceSequence(dir, deviceID, label string, seq int) error {
+	devDir := filepath.Join(dir, "devices")
+	if err := os.MkdirAll(devDir, 0o700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(wireDevice{Label: label, Seq: seq}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(devDir, deviceID+".json"), append(b, '\n'), 0o600)
+}
+
+// refuseRollback detects the only dangerous restored-backup path: an old copy
+// of this device identity attempting to publish a sequence the transport has
+// already seen. A normal stale machine pulls first and is harmless.
+func refuseRollback(dir string, db *store.DB, accept bool) error {
+	id, err := db.LocalDeviceID()
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "devices", id+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var remote wireDevice
+	if err := json.Unmarshal(b, &remote); err != nil {
+		return fmt.Errorf("read remote device record: %w", err)
+	}
+	local, _ := strconv.Atoi(db.Meta(store.MetaSyncSeqKey))
+	if remote.Seq > 0 && local > 0 && local+1 <= remote.Seq && !accept {
+		return fmt.Errorf("refusing rollback for device %s: local sequence %d is not newer than remote sequence %d; this can mean a restored backup or two machines cloned from one image (use --accept-rollback or `sync adopt-identity --new`)", id, local, remote.Seq)
+	}
+	return nil
 }
 
 func writeFormatFile(dir string) error {

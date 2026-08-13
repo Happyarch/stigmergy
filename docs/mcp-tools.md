@@ -6,6 +6,16 @@ an agent sees them as `mcp__stigmergy__context_open` and so on.
 Source: `internal/mcpserver/`. If this document and the code disagree, the code is
 right and this document is a bug.
 
+## Global-memory sync scope
+
+Agents cannot run sync: no MCP tool exists for it deliberately. When writing or
+promoting a global memory, distinguish a fact about this machine — hardware,
+this box's quirks, or a job running here — from a fact about the user or the
+work. The first must not sync (`machine-navi31-hard-locks` is an example). The
+second may be portable (`adversarial-review-round-cap-is-not-a-rejection` is an
+example), but only the user can explicitly share it with `stigmergy sync share
+<key>`. An agent should name that distinction so the user can decide.
+
 - [Session state machine](#session-state-machine)
 - [Errors](#errors)
 - [Context and roots](#context-and-roots)

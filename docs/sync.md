@@ -113,9 +113,28 @@ A project's global scope needs no `enable` step; it always exists.
 
 ## The daily shape
 
-Stage A has no automatic transport, so moving memories between two machines
-is two explicit steps, run on whichever machine currently has the changes to
-send:
+Configure a private transport once on each machine:
+
+```sh
+stigmergy sync init --remote git@github.com:me/stigmergy-memories.git
+```
+
+Then run the complete pass whenever memories should move:
+
+```sh
+stigmergy sync
+```
+
+The command fetches, reconciles every enabled project and the global scope,
+commits, and pushes. Its private working copy lives under
+`$XDG_DATA_HOME/stigmergy/sync/` at mode 0700. The first run names the remote
+and performs a dry-run warning on first use; re-run with `--confirm` because it receives plaintext memories. A remote
+equal to any project's `origin` is refused. A rejected push is fetched,
+reconciled, and retried once; sync never forces a push. `dir:/path` selects a
+directory transport for an already-managed private directory.
+
+`export` and `import` remain explicit primitives, useful when moving memories
+without git:
 
 ```sh
 stigmergy sync export /path/to/somewhere      # write this machine's state out
@@ -243,15 +262,8 @@ import` prints. Nothing else in the run is affected.
 
 ## What is not here yet
 
-Stage A is deliberately incomplete, and each gap below is a later stage, not
-an oversight:
+Some capabilities remain deferred to later stages:
 
-- **No transport.** `sync export`/`import` are the primitives; there is no
-  `sync init --remote`, no bare `stigmergy sync` that fetches and pushes for
-  every enabled project in one command, and no git integration of any kind.
-  Moving the exported directory between machines is left to the developer.
-- **No rollback detection.** Restoring a machine from an old backup and
-  syncing from it is not yet a case the tooling recognises specially.
 - **Episodes, verifications, and evidence policies do not sync.** Only
   memories and links do, in this stage. The append-only history tables need
   a stable cross-machine identity of their own first (sync-model.md §4.3).

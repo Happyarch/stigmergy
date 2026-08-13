@@ -38,6 +38,8 @@ const (
 	MetaSyncDeviceLabelKey = "sync_device_label"
 	MetaSyncProjectKey     = "sync_project"
 	MetaSyncFingerprintKey = "sync_fingerprint"
+	MetaSyncRemoteKey      = "sync_remote"
+	MetaSyncSeqKey         = "sync_seq"
 )
 
 // LocalDeviceID returns this database's cached device identity, minting and

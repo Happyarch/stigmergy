@@ -325,17 +325,17 @@ does not need to be clean. It is a separate subsystem with its own document —
 
 ### `stigmergy sync …`
 
-Carry your memories between your own machines. `enable` joins a project to the sync
-set, `export <dir>` writes this machine's memories to a directory, `import <dir>` reads
-another machine's export back in, `status` shows what is pending or contested, and
-`resolve <key>` settles a memory that changed on both machines.
+Carry memories between the developer's own machines. `sync init --remote <url>`
+configures a private git repository (or `dir:<path>`); bare `sync` fetches,
+reconciles, commits, and pushes. `enable` joins a project to the sync set,
+while `export` and `import` remain the directory primitives.
 
 This is for **one developer's own machines**, not for a team. A project can have several
 developers with private memories, so nothing here ever travels through the project's
 repository — moving the exported directory is a separate, deliberate act.
 
-There is no transport yet: move the directory however you like, including with a file
-syncer. Move only the *exported directory* that way, never `stigmergy.sqlite3` itself —
+The first git-backed sync prints a dry-run warning; re-run it with `--confirm`
+because the remote receives plaintext memories. Move only the *exported directory* with a file syncer, never `stigmergy.sqlite3` itself —
 [operations.md](operations.md) explains why that corrupts databases. Full guide:
 [sync.md](sync.md).
 
