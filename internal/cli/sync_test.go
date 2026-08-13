@@ -502,6 +502,54 @@ func TestRollbackIsRefused(t *testing.T) {
 	}
 }
 
+// TestRootCommitFingerprintIgnoresRefsUnreachableFromHEAD guards against the
+// bug this test is named for: two clones of the same repository disagreeing
+// on which remote-tracking branches they have fetched must still derive the
+// same join name. A fingerprint built from `--all` root commits would pick up
+// an orphan branch's unrelated root only on the clone that happened to fetch
+// it — exactly what sent two machines to two different project names in
+// production.
+func TestRootCommitFingerprintIgnoresRefsUnreachableFromHEAD(t *testing.T) {
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-b", "master")
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "f")
+	run("commit", "-m", "root on master")
+
+	before, err := rootCommitFingerprint(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run("checkout", "--orphan", "symbols")
+	run("rm", "-rf", "--cached", ".")
+	if err := os.WriteFile(filepath.Join(dir, "g"), []byte("2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "g")
+	run("commit", "-m", "unrelated root on symbols")
+	run("clean", "-fd")
+	run("checkout", "master")
+
+	after, err := rootCommitFingerprint(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("fetching an unrelated orphan branch changed the fingerprint: %s -> %s", before, after)
+	}
+}
+
 func mustGlobalPath(t *testing.T) string {
 	t.Helper()
 	p, err := xdg.GlobalDBPath()

@@ -1054,12 +1054,19 @@ func isShallowClone(commonDir string) bool {
 	return err == nil
 }
 
-// rootCommitFingerprint hashes every root commit's OID, sorted, exactly as
-// docs/sync-model.md §4.2 specifies. Read-only, local, no network — this is a
-// CLI command, never the hook path, so a git subprocess is fine here the same
+// rootCommitFingerprint hashes every root commit's OID reachable from HEAD,
+// sorted, exactly as docs/sync-model.md §4.2 specifies. Reachable from HEAD,
+// not --all: which remote-tracking branches and tags a clone happens to have
+// fetched is a local accident, not a property of "the same repository" — two
+// clones of one repo can disagree on that set (a branch pushed after one
+// clone was made, a remote never added, a stale ref pruned), and an orphan
+// branch reachable only through such a ref would then hand the two machines
+// two different fingerprints for the same project. HEAD is what both
+// machines actually agree on. Read-only, local, no network — this is a CLI
+// command, never the hook path, so a git subprocess is fine here the same
 // way it is in internal/gitx's fallback and internal/explore.
 func rootCommitFingerprint(worktree string) (string, error) {
-	out, err := runGit(worktree, "rev-list", "--max-parents=0", "--all")
+	out, err := runGit(worktree, "rev-list", "--max-parents=0", "HEAD")
 	if err != nil {
 		return "", err
 	}

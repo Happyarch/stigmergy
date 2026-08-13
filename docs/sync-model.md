@@ -443,10 +443,15 @@ Nothing today identifies "the same project on another machine".
 | Declared label | a typo silently forks the sync — or worse, silently joins two unrelated projects |
 
 **Chosen: a declared name, proposed from a root-commit fingerprint, confirmed
-once per machine** (D7). `stigmergy sync enable` hashes every root commit,
-sorted, and proposes the result as the join name; the human accepts or supplies
-`--as <name>`. In practice the human types nothing and both machines land on the
-same name.
+once per machine** (D7). `stigmergy sync enable` hashes every root commit
+reachable from HEAD, sorted, and proposes the result as the join name; the
+human accepts or supplies `--as <name>`. In practice the human types nothing
+and both machines land on the same name. HEAD only, not every fetched ref: a
+clone's set of remote-tracking branches is a local accident of what has been
+fetched, not a property of the repository, so hashing `--all` root commits
+lets an orphan branch fetched on one machine but not the other (an unrelated
+history subtree merged in from elsewhere) hand the two machines different
+fingerprints for what is otherwise the same project.
 
 The fingerprint then does what a name alone cannot: it is recorded in the
 transport, and a machine whose fingerprint disagrees with the remote's record
