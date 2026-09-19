@@ -9,22 +9,36 @@ import (
 
 // opencodeAdapter drives `opencode run` — the cheap seat in the rotation.
 //
-// Established against opencode v1.17.20:
+// Established against opencode v2.0.10 (flags re-checked on the 2.0.8 binary;
+// the run flags did not change between them):
 //
 //  1. The prompt is a POSITIONAL, not a flag: `opencode run <message>`. Every
 //     option precedes it, and there is no `--` prompt convention like codex's; a
 //     deliberate prompt never begins with a dash, so a bare trailing positional
 //     is unambiguous.
-//  2. --pure disables external plugins, and that is load-bearing, not tidiness:
-//     the stigmergy enforcement plugin this repo installs would otherwise apply
-//     claim blocking to the *worker's own* writes and stall a Planner that edits
-//     while grounding itself. --auto then auto-approves opencode's native
-//     permission prompts. Neither is the boundary — bwrap is (§6.4); these only
-//     stop the worker blocking on itself.
-//  3. Reasoning effort is --variant (provider-specific: high, max, minimal), NOT
-//     an --effort flag. Empty effort means omit it and take the model's default.
-//  4. The model is `provider/model` (e.g. lmstudio/qwen/qwen3.6-27b); that shape
-//     is the caller's to supply in the --agents spec.
+//  2. --standalone runs a private server instead of the background service. That
+//     is load-bearing, not tidiness, for two reasons. The stigmergy enforcement
+//     plugin stands down inside deliberation (see 3), and it can only see the
+//     driver's opt-out when it loads in the worker's own process — a shared
+//     service would run the plugin in its own environment, outside the sandbox,
+//     where the variable never arrives. It also keeps an ephemeral worker from
+//     sharing server state with the user's interactive sessions.
+//  3. There is no --pure anymore, and nothing else that disables the project's
+//     plugins — so the plugin stands itself down. When STIGMERGY_UNGUARDED is
+//     set (bwrap sets it for every worker; only this plugin reads it), setup
+//     registers nothing: no claim blocking against the worker's own writes,
+//     no registration text in its prompt. The V1 --pure did both of these by
+//     not loading the plugin at all; the effect is the same. Neither is the
+//     boundary — bwrap is (§6.4); this only stops the worker blocking on
+//     itself. --auto then auto-approves opencode's native permission prompts.
+//  4. Reasoning effort is a #variant suffix on the model
+//     (provider/model#variant), NOT a separate flag: V1's --variant is gone.
+//     Empty effort means no suffix and the model's default.
+//  5. There is no --dir either. The workdir comes from the process working
+//     directory, which runWrapped already sets to the agent's workdir both
+//     outside bwrap (Cmd.Dir) and inside it (--chdir) — so there is nothing to
+//     pass. A singular --dir was never the extent of what the worker could
+//     reach anyway; the sandbox is.
 //
 // Sessionless by design. opencode prints no resumable session id without parsing
 // its JSON event stream, and the payload is self-contained, so this host returns
@@ -46,15 +60,11 @@ func (opencodeAdapter) StateDirs() []string {
 }
 
 func (o opencodeAdapter) Turn(ctx context.Context, a *Agent, prompt string) (string, string, error) {
-	args := []string{"opencode", "run", "--pure", "--auto", "--model", a.Model}
-	if a.Effort != "" {
-		args = append(args, "--variant", a.Effort)
+	model := a.Model
+	if a.Effort != "" && !strings.Contains(model, "#") {
+		model += "#" + a.Effort
 	}
-	// --dir is redundant with bwrap's --chdir but harmless, and it is the
-	// documented way opencode is told which directory it works in.
-	args = append(args, "--dir", a.Workdir)
-	// The prompt is the trailing positional message.
-	args = append(args, prompt)
+	args := []string{"opencode", "run", "--standalone", "--auto", "--model", model, prompt}
 
 	out, err := runWrapped(ctx, a, o.StateDirs(), args)
 	if err != nil {

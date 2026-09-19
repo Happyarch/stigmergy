@@ -91,8 +91,9 @@ type Agent struct {
 //
 // Hosts that take a repeatable directory flag get all of them — verified live:
 // agy's --add-dir is documented "(repeatable)" and claude's takes a variadic
-// list. Hosts with a singular flag (opencode's --dir) get Workdir and reach the
-// rest through the sandbox, which does not care what the host was told.
+// list. Hosts with no directory flag (opencode's --dir is gone in V2; the
+// workdir comes from the process cwd) reach the rest through the sandbox, which
+// does not care what the host was told.
 func (a *Agent) WorkDirs() []string {
 	if len(a.Confine.Repos) == 0 {
 		return []string{a.Workdir}

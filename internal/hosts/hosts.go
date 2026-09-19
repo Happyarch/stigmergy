@@ -160,7 +160,7 @@ var registry = []Host{
 		Claims:    ClaimsBlocked,
 		Mail:      MailAdvisory,
 		Subagents: SubagentsGated,
-		// The plugin hook carries this: opencode's tool.execute.before payload
+		// The plugin hook carries this: opencode's execute.before event
 		// names the session, so the agent never has to work it out.
 		SessionLabel: "your opencode session id (ses_…) — the plugin tells you the exact one to use",
 	},

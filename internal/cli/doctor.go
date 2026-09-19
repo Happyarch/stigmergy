@@ -394,7 +394,12 @@ func checkHostConfig(d *diag, label, worktree string) bool {
 	antigravity := fileContains(antigravityMCP, "stigmergy") && fileContains(antigravityHooks, "stigmergy hook")
 
 	openCodeConfig, openCodePlugin := hostcfg.OpenCodePaths(worktree)
-	opencode := fileContains(openCodeConfig, "stigmergy") && fileContains(openCodePlugin, "stigmergy hook")
+	// A V1 install never re-initialized still guards from the singular
+	// directory. It counts as configured — and as a nudge to re-run init,
+	// which migrates it — rather than as missing.
+	opencode := fileContains(openCodeConfig, "stigmergy") &&
+		(fileContains(openCodePlugin, "stigmergy hook") ||
+			fileContains(hostcfg.OpenCodeLegacyPluginPath(worktree), "stigmergy hook"))
 
 	// Keyed by agent_kind and walked in registry order, so a host that exists but
 	// is missing here shows up as a blank row rather than as nothing at all. The

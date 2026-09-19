@@ -173,6 +173,15 @@ func BwrapArgs(s Sandbox, cmd []string) []string {
 	if chdir == "" && len(repos) > 0 {
 		chdir = repos[0]
 	}
+	// Every worker opts out of stigmergy's own enforcement. The claim guard
+	// coordinates the real tree between registered roots; a worker is an
+	// ephemeral session whose writes evaporate with the overlay, so enforcing
+	// the real tree's claims against it only stalls it on files it does not
+	// hold. Only the opencode plugin reads this variable — the other hosts'
+	// hooks are binaries that ignore it — and the plugin's stand-down covers
+	// both its hooks, not just the guard. bwrap is still the boundary; this
+	// only stops the worker blocking on itself.
+	args = append(args, "--setenv", "STIGMERGY_UNGUARDED", "1")
 	args = append(args, "--chdir", chdir, "--")
 	return append(args, cmd...)
 }

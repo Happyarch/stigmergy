@@ -291,7 +291,7 @@ func installHosts(out io.Writer, worktree, host string) error {
 		fmt.Fprintln(out, "opencode")
 		fmt.Fprintf(out, "  %s        MCP server\n", configPath)
 		fmt.Fprintf(out, "  %s  hooks (claim enforcement)\n", pluginPath)
-		fmt.Fprintln(out, "  The plugin loads automatically from .opencode/plugin/ and shells out to stigmergy,")
+		fmt.Fprintln(out, "  The plugin loads automatically from .opencode/plugins/ and shells out to stigmergy,")
 		fmt.Fprintln(out, "  so the binary must be on PATH for the agents opencode runs.")
 		fmt.Fprintln(out, "  opencode has no end-of-turn hook: mail is delivered as a turn begins, but an")
 		fmt.Fprintln(out, "  agent can finish without reading it.")

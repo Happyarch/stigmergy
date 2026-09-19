@@ -35,14 +35,14 @@ func newOpenCodeHookCmds() []*cobra.Command {
 // newOpenCodeClaimGuardCmd blocks an edit to a file another agent has claimed.
 //
 // This host can genuinely block. The plugin throws on a deny, opencode
-// treats a throw from tool.execute.before as an unrecoverable defect, and the
-// tool never runs — the trigger is awaited before the tool executes and nothing
-// catches it. The reason reaches the model verbatim, so unlike Codex the agent
-// is both stopped and told who to talk to.
+// treats a throw from execute.before as a failed tool call that never runs —
+// the hook is awaited before the tool executes and nothing catches it. The
+// reason reaches the model verbatim, so unlike Codex the agent is both stopped
+// and told who to talk to.
 func newOpenCodeClaimGuardCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "opencode-claim-guard",
-		Short:        "tool.execute.before: block edits to files claimed by another agent",
+		Short:        "execute.before: block edits to files claimed by another agent",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -80,7 +80,7 @@ func newOpenCodeClaimGuardCmd() *cobra.Command {
 func newOpenCodeRootGateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "opencode-root-gate",
-		Short:        "tool.execute.before: keep subagents out of the root-only tools",
+		Short:        "execute.before: keep subagents out of the root-only tools",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -103,11 +103,11 @@ func newOpenCodeRootGateCmd() *cobra.Command {
 // newOpenCodeContextCmd hands the agent its registration details and its mail.
 //
 // It is the session-start hook and the mail notifier at once, because opencode
-// offers one place that fires at the right moment: chat.message, once per real
-// user prompt. That is the UserPromptSubmit analogue, and it deliberately does
-// not fire for the internal title, summary or compaction agents.
+// offers one place that fires at the right moment: the prompt hook, once per
+// real user prompt. That is the UserPromptSubmit analogue, and it deliberately
+// does not fire for the internal title, summary or compaction agents.
 //
-// The obvious alternative was experimental.chat.system.transform, which reaches
+// The obvious alternative was the system-transform hook, which reaches
 // every request and carries the sessionID. It is a trap: it fires for those
 // internal agents too, with nothing in the payload to tell them apart — a live
 // probe caught stigmergy's text being pushed into the title generator's prompt —
@@ -121,7 +121,7 @@ func newOpenCodeRootGateCmd() *cobra.Command {
 func newOpenCodeContextCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "opencode-context",
-		Short:        "chat.message: hand the agent its registration details and any mail",
+		Short:        "prompt: hand the agent its registration details and any mail",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {

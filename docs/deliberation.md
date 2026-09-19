@@ -754,19 +754,20 @@ they turn a payload into text. Everything else is the driver's.
 
 Verified against installed CLIs, 2026-07-16. This table is the reason the
 architecture is what it is, so it says what was checked rather than what the docs
-promise:
+promise: the opencode column was re-checked against the 2.0.8 binary on
+2026-09-19, with 2.0.10 docs and plugin types.
 
-| | Claude Code 2.1.212 | Codex 0.144.5 | opencode 1.17.20 | Antigravity (agy) 1.0.10 |
+| | Claude Code 2.1.212 | Codex 0.144.5 | opencode 2.0.10 | Antigravity (agy) 1.0.10 |
 |---|---|---|---|---|
-| headless | `-p` | `codex exec <prompt>` | `opencode run <msg>` | `-p` / `--print` |
+| headless | `-p` | `codex exec <prompt>` | `opencode run <msg>` ✔ | `-p` / `--print` |
 | resume | `--resume <id>` | `codex exec resume <id> <prompt>` | `--session <id>` | `--conversation <id>` |
-| session id | **pre-assign** `--session-id <uuid>` ✔ | **`thread.started` event** ✔ | `opencode session list` | **diff `conversations/`** ✔ |
+| session id | **pre-assign** `--session-id <uuid>` ✔ | **`thread.started` event** ✔ | driver stays sessionless | **diff `conversations/`** ✔ |
 | resume, wrapped | ✔ | ✔ | ✗ | ✗ |
 | structured out | `--output-format json` | `--json`, `-o <file>`, `--output-schema <file>` | `--format json` | *none found* |
-| model | `--model`, `--effort` | `-m` | `-m`, `--variant` | `--model` |
-| never prompts | `--permission-mode acceptEdits` ✔ | `-c approval_policy="never"` ✔ | `--auto` | `--dangerously-skip-permissions` ✔ |
-| workspace scoping | inherits cwd ✔ | `-C <dir>` / cwd ✔ | `--dir <dir>` | **`--add-dir` — cwd is ignored** ✔ |
-| effort | `--effort low` | `-c model_reasoning_effort=` | `--variant` | **baked into the model name** |
+| model | `--model`, `--effort` | `-m` | `-m provider/model#variant` | `--model` |
+| never prompts | `--permission-mode acceptEdits` ✔ | `-c approval_policy="never"` ✔ | `--auto` ✔ | `--dangerously-skip-permissions` ✔ |
+| workspace scoping | inherits cwd ✔ | `-C <dir>` / cwd ✔ | inherits cwd ✔ | **`--add-dir` — cwd is ignored** ✔ |
+| effort | `--effort low` | `-c model_reasoning_effort=` | `#variant` suffix on the model | **baked into the model name** |
 
 What matters is the last two rows: each host must be pointable at a **directory**
 and tellable not to ask. Confinement is deliberately absent from this table —
@@ -956,26 +957,18 @@ the harness layer, with no model judgment involved. Antigravity did it.
 "approve everything" — it means *never ask*, and an execution failure is returned to
 the model instead of a prompt. Deny and don't-ask are one setting.
 
-**opencode can be finer-grained if wanted.** It has no sandbox — my first draft
-therefore wrote it off as unconfinable, which was wrong. It has a `permission`
-config with values `ask | allow | deny` (`Literals(["ask","allow","deny"])`, read
-out of the v1.17.20 binary) over these categories:
+**opencode can be finer-grained if wanted.** It has no sandbox, but it has a
+`permissions` config: one ordered array of rules with actions such as `shell`,
+`edit` and `subagent` and effects `ask | allow | deny`.
 
-```
-bash  edit  read  glob  grep  webfetch  websearch  external_directory
-lsp   task  skill  todowrite  plan_enter  plan_exit  question  doom_loop
-```
+`--auto` only approves what the rules do not explicitly deny, so a denied
+category is never silently approved by it. Under the overlay none of this is
+*needed* — a worker's writes are shadowed wherever it aims them.
 
-`--auto` only auto-replies to a prompt that was going to be shown (`case
-"permission.asked": if (mode === "auto") permission.reply({reply: "once"})`), so a
-denied category is never silently approved by it. Under the overlay none of this is
-*needed* — a worker's writes are shadowed wherever it aims them — but
-`external_directory: "deny"` is cheap and narrows what it tries in the first place.
-
-A useful bonus from the `opencode-plugin-contract` research: denying `stigmergy_*`
-removes the server's tools **and** silently drops its instructions from the system
-prompt. A footgun for a normal agent; exactly right for a worker, which must not be
-told to register as a root.
+Denying `stigmergy_*` hides the server's tools from a worker. For a normal agent
+that denial is a footgun — the shared rules arrive with the server — and for a
+worker, which must never register as a root, it is the correct narrowing. The
+driver does not pass it today; the sandbox boundary holds without it.
 
 **None of these flags is the boundary.** [§6.4](#64-bwrap-is-the-boundary) is. The
 table above is about *not hanging*; what a host can be talked into not writing is
@@ -1384,21 +1377,25 @@ this section was resolved by reading.
 3. **Antigravity session id.** Whether `--print` reveals a conversation id at all.
    If not, Antigravity is sessionless forever and pays full context rebuild every
    turn — which works, but should be a known cost, not a surprise.
-4. **opencode session id from `run`.** `opencode session list` exists; whether
-   `--format json` names the session inline is unchecked. Listing is a race if two
-   runs overlap, so inline is worth confirming.
-5. **Whether Claude and opencode resume cache the way codex does.** Assumed from
+4. **opencode session id from `run`.** Answered: the driver stays sessionless
+   by design and returns `""` every turn, re-sending the full payload
+   ([§4.3](#43-resume)). No id capture is needed, inline or otherwise.
+5. **Whether Claude resume caches the way codex does.** Assumed from
    the codex result, which is exactly the kind of assumption this section exists to
-   stop people making. Measure each.
+   stop people making. Measure it. (opencode is out of scope: it never resumes.)
 6. **agy resume, end to end.** The conversation `.db` exists and `--conversation`
    takes an id; nobody has round-tripped one and confirmed the context survives.
    If it does not, agy is sessionless and pays a context rebuild every turn —
    which works ([§4.3](#43-resume)) and is a cost, not a blocker.
-7. **opencode, end to end.** The one host never launched for this document.
-   `--dir`, `--auto`, the `permission` deny-list and `~/.local/share/opencode` are
-   all read off the binary rather than run. Probe it the same way: ask it to
-   escape. Deferring it is legitimate — a rotation of codex, claude and agy is
-   three different minds already.
+7. **opencode, end to end.** Launched during the V2 migration, against 2.0.8
+   with 2.0.10 docs and types. The plugin loads with no dependency; the
+   prompt hook registers a fresh session as a root and delivers its mail; the
+   claim guard blocks a write to a claimed file and the reason reaches the
+   model verbatim; the root gate denies a subagent session; `--standalone`
+   and `--auto` hold for unattended turns; the `STIGMERGY_UNGUARDED`
+   stand-down lets a worker write through. Two narrow checks remain: the
+   escape probe (the `?` in [§6.2](#62-a-worker-must-never-be-asked-anything))
+   and a `#variant` model suffix on a real turn.
 8. **Worktree lifecycle under failure.** `git worktree remove` on a crashed run
    leaves admin entries needing `git worktree prune`. The driver should prune on
    start and reuse an existing slot worktree on `--resume-run`, but the

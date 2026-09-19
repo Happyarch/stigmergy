@@ -135,6 +135,25 @@ func TestStateDirsSurvive(t *testing.T) {
 	}
 }
 
+// TestWorkersStandDownStigmergyEnforcement: the sandbox opts every worker out
+// of stigmergy's own claim coordination. A worker is an ephemeral session whose
+// writes evaporate with the overlay; enforcing the real tree's claims against
+// it only stalls it on files it does not hold. Only the opencode plugin reads
+// the variable, so this is behaviorally scoped to that host even though the
+// argv is shared.
+func TestWorkersStandDownStigmergyEnforcement(t *testing.T) {
+	args := BwrapArgs(Sandbox{Repos: []string{"/mnt/code/p"}, Chdir: "/mnt/code/p"}, []string{"true"})
+	// --setenv takes two values, so this is a triple, not a pair: the flag,
+	// the variable name indexOfPair matched, and "1" after it.
+	i := indexOfPair(args, "--setenv", "STIGMERGY_UNGUARDED")
+	if i == -1 {
+		t.Fatalf("workers must set STIGMERGY_UNGUARDED or the opencode plugin blocks their own writes\ngot: %v", args)
+	}
+	if args[i+2] != "1" {
+		t.Errorf("STIGMERGY_UNGUARDED = %q, want \"1\"", args[i+2])
+	}
+}
+
 // TestCommandComesLast: everything after -- is the host's argv, not bwrap's.
 func TestCommandComesLast(t *testing.T) {
 	args := BwrapArgs(Sandbox{Repos: []string{"/mnt/code/p"}, Chdir: "/mnt/code/p", StateDirs: nil, PayloadPath: ""}, []string{"codex", "exec", "--json"})

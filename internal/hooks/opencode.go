@@ -144,10 +144,10 @@ func NewOpenCodeDeny(reason string) OpenCodeDeny {
 
 // OpenCodeContext is text for the agent to read, returned to the plugin.
 //
-// The plugin appends it to the user's message as a synthetic part, which is the
-// closest thing opencode has to Claude's UserPromptSubmit: it fires once per
-// real user prompt, and never for the internal title, summary or compaction
-// agents.
+// The plugin extends the admitted prompt's text with it, which is the closest
+// thing opencode has to Claude's UserPromptSubmit: the prompt hook fires once
+// per real user prompt, and never for the internal title, summary or
+// compaction agents.
 type OpenCodeContext struct {
 	Context string `json:"context,omitempty"`
 }
