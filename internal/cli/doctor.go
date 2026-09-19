@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -394,12 +395,24 @@ func checkHostConfig(d *diag, label, worktree string) bool {
 	antigravity := fileContains(antigravityMCP, "stigmergy") && fileContains(antigravityHooks, "stigmergy hook")
 
 	openCodeConfig, openCodePlugin := hostcfg.OpenCodePaths(worktree)
-	// A V1 install never re-initialized still guards from the singular
-	// directory. It counts as configured — and as a nudge to re-run init,
-	// which migrates it — rather than as missing.
+	// A V1 install that was never re-initialized is migrated here rather than
+	// only reported: the plugin file is stigmergy's own (regenerated on every
+	// init), and InstallOpenCode merges the config without touching the user's
+	// keys. A V1 plugin does not run on opencode V2 at all, so "configured"
+	// without migration is the quiet failure this check exists to prevent.
+	// This is the same standing doctor already claims for EnsureSelfRepo
+	// above: a diagnostic that heals what it owns without a re-run of init.
 	opencode := fileContains(openCodeConfig, "stigmergy") &&
 		(fileContains(openCodePlugin, "stigmergy hook") ||
 			fileContains(hostcfg.OpenCodeLegacyPluginPath(worktree), "stigmergy hook"))
+	if opencode {
+		if migrated, err := migrateOpenCodeIfStale(worktree); err != nil {
+			d.warn("%sopencode install could not be migrated: %v", label, err)
+			d.note("Run `stigmergy init --host opencode` in %s.", worktree)
+		} else if migrated {
+			d.pass("%sopencode install migrated to the current shape", label)
+		}
+	}
 
 	// Keyed by agent_kind and walked in registry order, so a host that exists but
 	// is missing here shows up as a blank row rather than as nothing at all. The
@@ -479,6 +492,54 @@ func autoMemoryDisabled(settingsPath string) bool {
 	}
 	enabled, ok := settings[hostcfg.AutoMemoryKey].(bool)
 	return ok && !enabled
+}
+
+// migrateOpenCodeIfStale rewrites a stale opencode install in place and
+// reports whether anything changed. InstallOpenCode is idempotent — a current
+// install comes back byte-identical — so the snapshot comparison is what
+// distinguishes "migrated" from "already current". It runs only when
+// stigmergy markers are already present; doctor never enables a host the user
+// did not ask for.
+func migrateOpenCodeIfStale(worktree string) (bool, error) {
+	configPath, pluginPath := hostcfg.OpenCodePaths(worktree)
+	before := snapshotOpenCode(configPath, pluginPath, hostcfg.OpenCodeLegacyPluginPath(worktree))
+	if err := hostcfg.InstallOpenCode(worktree); err != nil {
+		return false, err
+	}
+	after := snapshotOpenCode(configPath, pluginPath, hostcfg.OpenCodeLegacyPluginPath(worktree))
+	return !before.equal(after), nil
+}
+
+// openCodeSnapshot is the bytes doctor compares to tell a migration from a
+// no-op. Missing files snapshot as nil, which compares unequal to any install
+// output — but the caller only runs the install when markers are present, so
+// a nil here means a half-written install, which is exactly what migrates.
+type openCodeSnapshot struct {
+	config []byte
+	plugin []byte
+	legacy []byte
+}
+
+func snapshotOpenCode(configPath, pluginPath, legacyPath string) openCodeSnapshot {
+	return openCodeSnapshot{
+		config: readIfPresent(configPath),
+		plugin: readIfPresent(pluginPath),
+		legacy: readIfPresent(legacyPath),
+	}
+}
+
+func (s openCodeSnapshot) equal(o openCodeSnapshot) bool {
+	return bytes.Equal(s.config, o.config) &&
+		bytes.Equal(s.plugin, o.plugin) &&
+		bytes.Equal(s.legacy, o.legacy)
+}
+
+func readIfPresent(path string) []byte {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 func fileContains(path, needle string) bool {
