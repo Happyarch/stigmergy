@@ -251,31 +251,6 @@ stays blocked until you upgrade the binary. `doctor` says so in as many words, b
 "all my edits are blocked" with no explanation is the worst experience this tool can
 inflict.
 
-### Upgrading: migrate the database and the binary together
-
-This is the sharp edge of the rule above, and it is easy to walk into.
-
-Running a *newer* `stigmergy` anywhere — `init`, `doctor`, an MCP server — migrates the
-project database. From that moment, the older binary still on `$PATH` fails closed on
-every edit, in every session, because it cannot read the schema and refuses to guess
-about claims. The system is behaving exactly as designed and the experience is that all
-work stops.
-
-So: install the new binary, *then* migrate. In practice:
-
-```sh
-make install                 # or: cp bin/stigmergy ~/.local/bin/stigmergy
-stigmergy doctor             # confirms the schema version it can actually read
-```
-
-If the copy fails with `Text file busy`, a running MCP server is holding the old binary
-open. `mv` it aside and copy the new one into place — the running process keeps its
-inode, and the next session picks up the new file.
-
-Restart agent sessions afterwards. A session's MCP server is the binary it was launched
-with: until it restarts, that session keeps the old tool set and the old constants, even
-though its hooks (which are fresh processes each time) already have the new ones.
-
 ## Upgrading the binary
 
 The claim guard fails closed when a project's schema version differs from the
